@@ -6,6 +6,7 @@ import (
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/widget"
 
@@ -45,17 +46,11 @@ func showSettingsWindow(fyneApp fyne.App, cfg *config.Config, onSave func(*confi
 		float64(cfg.SilenceChunks), float64(cfg.SilenceChunks)*62))
 	silenceSlider := widget.NewSlider(4, 32)
 	silenceSlider.SetValue(float64(cfg.SilenceChunks))
-	silenceSlider.OnChanged = func(v float64) {
-		silenceLabel.SetText(fmt.Sprintf("%.0f chunks (~%.0f ms)", v, v*62))
-	}
 
 	sensitivityLabel := widget.NewLabel(fmt.Sprintf("%.1f", cfg.Sensitivity))
 	sensitivitySlider := widget.NewSlider(1.0, 6.0)
 	sensitivitySlider.Step = 0.1
 	sensitivitySlider.SetValue(cfg.Sensitivity)
-	sensitivitySlider.OnChanged = func(v float64) {
-		sensitivityLabel.SetText(fmt.Sprintf("%.1f", v))
-	}
 
 	// ---- General ----
 	hotkeyEntry := widget.NewEntry()
@@ -72,14 +67,57 @@ func showSettingsWindow(fyneApp fyne.App, cfg *config.Config, onSave func(*confi
 	// ---- Buttons ----
 	saveBtn := widget.NewButton("Save", nil)
 	saveBtn.Importance = widget.HighImportance
-	cancelBtn := widget.NewButton("Cancel", func() { w.Close() })
+	saveBtn.Disable()
 
-	saveBtn.OnTapped = func() {
+	closeBtn := widget.NewButton("Close", nil)
+
+	// hasChanges returns true if any widget differs from the original cfg.
+	hasChanges := func() bool {
 		timeout, err := strconv.Atoi(timeoutEntry.Text)
 		if err != nil || timeout < 5 {
 			timeout = cfg.Timeout
 		}
+		return langEntry.Text != cfg.Language ||
+			apiKeyEntry.Text != cfg.APIKey ||
+			advancedCheck.Checked != cfg.UseAdvancedAPI ||
+			int(silenceSlider.Value) != cfg.SilenceChunks ||
+			fmt.Sprintf("%.1f", sensitivitySlider.Value) != fmt.Sprintf("%.1f", cfg.Sensitivity) ||
+			hotkeyEntry.Text != cfg.Hotkey ||
+			timeout != cfg.Timeout ||
+			punctCheck.Checked != cfg.EnablePunctuation
+	}
 
+	// updateSaveBtn enables or disables Save based on whether anything changed.
+	updateSaveBtn := func() {
+		if hasChanges() {
+			saveBtn.Enable()
+		} else {
+			saveBtn.Disable()
+		}
+	}
+
+	// Wire all widgets to updateSaveBtn.
+	langEntry.OnChanged = func(_ string) { updateSaveBtn() }
+	apiKeyEntry.OnChanged = func(_ string) { updateSaveBtn() }
+	advancedCheck.OnChanged = func(_ bool) { updateSaveBtn() }
+	silenceSlider.OnChanged = func(v float64) {
+		silenceLabel.SetText(fmt.Sprintf("%.0f chunks (~%.0f ms)", v, v*62))
+		updateSaveBtn()
+	}
+	sensitivitySlider.OnChanged = func(v float64) {
+		sensitivityLabel.SetText(fmt.Sprintf("%.1f", v))
+		updateSaveBtn()
+	}
+	hotkeyEntry.OnChanged = func(_ string) { updateSaveBtn() }
+	timeoutEntry.OnChanged = func(_ string) { updateSaveBtn() }
+	punctCheck.OnChanged = func(_ bool) { updateSaveBtn() }
+
+	// doSave builds the new config from current widget values and calls onSave.
+	doSave := func() {
+		timeout, err := strconv.Atoi(timeoutEntry.Text)
+		if err != nil || timeout < 5 {
+			timeout = cfg.Timeout
+		}
 		newCfg := &config.Config{
 			Hotkey:            hotkeyEntry.Text,
 			Language:          langEntry.Text,
@@ -91,7 +129,36 @@ func showSettingsWindow(fyneApp fyne.App, cfg *config.Config, onSave func(*confi
 			EnablePunctuation: punctCheck.Checked,
 		}
 		onSave(newCfg)
+		// Update cfg baseline so Save disables again and hasChanges is accurate.
+		*cfg = *newCfg
+		saveBtn.Disable()
 	}
+
+	saveBtn.OnTapped = func() { doSave() }
+
+	// tryClose closes the window, but prompts first if there are unsaved changes.
+	tryClose := func() {
+		if !hasChanges() {
+			w.Close()
+			return
+		}
+		d := dialog.NewCustomConfirm(
+			"Unsaved changes",
+			"Save", "Discard",
+			widget.NewLabel("You have unsaved changes."),
+			func(save bool) {
+				if save {
+					doSave()
+				}
+				w.Close()
+			},
+			w,
+		)
+		d.Show()
+	}
+
+	closeBtn.OnTapped = tryClose
+	w.SetCloseIntercept(tryClose)
 
 	// ---- Layout ----
 	form := container.New(layout.NewFormLayout(),
@@ -126,7 +193,7 @@ func showSettingsWindow(fyneApp fyne.App, cfg *config.Config, onSave func(*confi
 		punctCheck,
 	)
 
-	buttons := container.NewHBox(layout.NewSpacer(), cancelBtn, saveBtn)
+	buttons := container.NewHBox(layout.NewSpacer(), closeBtn, saveBtn)
 	content := container.NewBorder(nil, buttons, nil, nil, container.NewVScroll(form))
 
 	w.SetContent(content)
