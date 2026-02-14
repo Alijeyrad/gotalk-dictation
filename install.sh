@@ -38,10 +38,9 @@ install_deps_fedora() {
         libXi-devel \
         libXxf86vm-devel \
         mesa-libGL-devel \
-        alsa-lib-devel \
+        alsa-utils \
         xdotool \
-        libnotify \
-        ffmpeg
+        xclip
 }
 
 install_deps_ubuntu() {
@@ -55,10 +54,9 @@ install_deps_ubuntu() {
         libxi-dev \
         libxxf86vm-dev \
         libgl1-mesa-dev \
-        libasound2-dev \
+        alsa-utils \
         xdotool \
-        libnotify-bin \
-        ffmpeg
+        xclip
 }
 
 install_deps_arch() {
@@ -71,10 +69,9 @@ install_deps_arch() {
         libxi \
         libxxf86vm \
         mesa \
-        alsa-lib \
+        alsa-utils \
         xdotool \
-        libnotify \
-        ffmpeg
+        xclip
 }
 
 case "$DISTRO" in
@@ -87,7 +84,7 @@ case "$DISTRO" in
     *)
         warn "Unknown distro '$DISTRO'. Checking for required tools manually..."
         MISSING=()
-        for tool in xdotool ffmpeg; do
+        for tool in arecord xdotool xclip; do
             command -v "$tool" &>/dev/null || MISSING+=("$tool")
         done
         if [ ${#MISSING[@]} -gt 0 ]; then
@@ -123,6 +120,20 @@ read -r -p "Install to /usr/local/bin? [y/N] " REPLY
 if [[ "${REPLY,,}" == "y" ]]; then
     sudo install -m 755 gotalk-dictation /usr/local/bin/gotalk-dictation
     success "Installed to /usr/local/bin/gotalk-dictation"
+
+    # Install a system desktop file so KDE/PipeWire can identify the app and
+    # remember the microphone permission grant across sessions.
+    sudo tee /usr/share/applications/gotalk-dictation.desktop >/dev/null <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=GoTalk Dictation
+Comment=System-wide speech-to-text dictation
+Exec=gotalk-dictation
+Icon=audio-input-microphone
+Categories=Accessibility;Utility;
+NoDisplay=true
+EOF
+    success "Desktop entry installed to /usr/share/applications/gotalk-dictation.desktop"
 fi
 
 # ---- hotkey setup reminder --------------------------------------------------
@@ -155,7 +166,9 @@ if [[ "${REPLY,,}" == "y" ]]; then
 Type=Application
 Name=GoTalk Dictation
 Exec=${BINARY_PATH}
+Icon=audio-input-microphone
 Comment=System-wide speech-to-text dictation
+Categories=Accessibility;Utility;
 X-GNOME-Autostart-enabled=true
 EOF
     success "Autostart entry created: $DESKTOP_FILE"

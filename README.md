@@ -1,378 +1,166 @@
 # GoTalk Dictation
 
-A fast, native Linux speech-to-text application built with Go and Fyne. Convert your speech to text anywhere on your system with a simple keyboard shortcut.
+A fast, native Linux speech-to-text app. Press a hotkey anywhere, speak, and the transcribed text is typed at your cursor.
 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
-![Go Version](https://img.shields.io/badge/go-1.25.7-blue.svg)
 
 ## Features
 
-- 🎤 **System-wide dictation** - Works in any application
-- ⚡ **Fast & Native** - Written in pure Go, no Python dependencies
-- ⌨️ **Global hotkey** - Default: Alt+D (customizable)
-- 🌍 **Multi-language support** - English, Spanish, and more
-- 🔔 **Desktop notifications** - Visual feedback during dictation but minimal
-- 🎯 **Punctuation commands** - Say "period", "comma", "question mark"
-- 🎨 **System tray integration** - Quick access from anywhere
-- 🔒 **Privacy-focused** - Uses Google Cloud Speech API (requires API key)
-- 🐧 **Linux native** - Built specifically for Linux desktop environments
-
-## Architecture
-
-```
-gotalk-dictation/
-├── main.go                     # Application entry point
-├── internal/
-│   ├── speech/
-│   │   └── recognizer.go      # Google Cloud Speech integration
-│   ├── audio/
-│   │   └── recorder.go        # ALSA/PulseAudio audio capture
-│   ├── hotkey/
-│   │   └── manager.go         # Global hotkey registration
-│   ├── ui/
-│   │   ├── tray.go            # System tray icon and menu
-│   │   ├── settings.go        # Settings window
-│   │   └── history.go         # Dictation history viewer
-│   ├── config/
-│   │   └── config.go          # Configuration management
-│   └── typing/
-│       └── typer.go           # X11 keyboard simulation (xdotool)
-├── assets/
-│   ├── icon.png               # Application icon
-│   └── tray-icons/            # System tray icons (various states)
-├── go.mod
-├── go.sum
-└── README.md
-```
+- **System-wide dictation** — works in any application
+- **Global hotkey** — default `Alt+D`, fully rebindable live from Settings
+- **Visual indicator** — small X11 overlay shows listening / processing / done / error states
+- **Voice Activity Detection** — auto-stops after silence; configurable sensitivity and silence duration
+- **Punctuation commands** — say "period", "comma", "question mark", etc.
+- **Multi-language** — English (US), Spanish, French, German, Persian (Farsi); easily extended
+- **No ffmpeg** — pure Go FLAC encoder, no external audio tools needed
+- **Two API modes** — free public Google API (no account needed) or Google Cloud Speech API
 
 ## Prerequisites
 
-### System Dependencies
+### Runtime dependencies
 
 ```bash
 # Fedora/RHEL
-sudo dnf install -y libx11-devel libxcursor-devel libxrandr-devel \
-  libxinerama-devel libxi-devel libgl-devel alsa-lib-devel \
-  xdotool libnotify
+sudo dnf install -y alsa-utils xdotool xclip
 
 # Ubuntu/Debian
-sudo apt install -y libx11-dev libxcursor-dev libxrandr-dev \
-  libxinerama-dev libxi-dev libgl1-mesa-dev libasound2-dev \
-  xdotool libnotify-bin
+sudo apt install -y alsa-utils xdotool xclip
 
 # Arch
-sudo pacman -S libx11 libxcursor libxrandr libxinerama libxi \
-  mesa alsa-lib xdotool libnotify
+sudo pacman -S alsa-utils xdotool xclip
 ```
 
-### Google Cloud Speech API
+`arecord` (from `alsa-utils`) captures the microphone.
+`xdotool` types short transcripts directly; `xclip` is used for paste-based insertion of longer text (faster for long dictations).
 
-1. Create a Google Cloud project: https://console.cloud.google.com
-2. Enable Speech-to-Text API
-3. Create a service account and download JSON key
-4. Set environment variable:
+### Build dependencies
 
 ```bash
-   export GOOGLE_APPLICATION_CREDENTIALS="/path/to/service-account-key.json"
+# Fedora/RHEL
+sudo dnf install -y gcc libX11-devel libXcursor-devel libXrandr-devel \
+  libXinerama-devel libXi-devel mesa-libGL-devel
+
+# Ubuntu/Debian
+sudo apt install -y gcc libx11-dev libxcursor-dev libxrandr-dev \
+  libxinerama-dev libxi-dev libgl1-mesa-dev
+
+# Arch
+sudo pacman -S gcc libx11 libxcursor libxrandr libxinerama libxi mesa
 ```
-
-**OR** use the free tier without authentication (limited to 60 minutes/month):
-
-- The app will use Google's free public API endpoint
 
 ## Installation
 
-### From Source
-
 ```bash
-# Clone repository
 git clone https://github.com/Alijeyrad/gotalk-dictation.git
 cd gotalk-dictation
-
-# Install dependencies
-go mod download
-
-# Build
-go build -o gotalk-dictation
-
-# Install (optional)
+go build -ldflags="-s -w" -o gotalk-dictation
 sudo install -m 755 gotalk-dictation /usr/local/bin/
 ```
 
-### Run
+Or use the provided install script:
 
 ```bash
-# Run directly
-./gotalk-dictation
-
-# Or if installed
-gotalk-dictation
+./install.sh
 ```
 
 ## Usage
 
-### Basic Dictation
+1. Run `gotalk-dictation` — it appears in the system tray.
+2. Press **Alt+D** (or your configured hotkey).
+3. Speak. The floating indicator shows the current state.
+4. Text is typed at the cursor when you stop speaking.
 
-1. Press **Alt+D** (or your configured hotkey)
-2. Wait for the "🎤 Listening..." notification
-3. Speak clearly into your microphone
-4. Text will be typed automatically at your cursor position
+Press the hotkey again while listening to cancel.
 
-### Punctuation Commands
+### Punctuation commands
 
-Say these words to insert punctuation:
+| Say               | Gets typed |
+| ----------------- | ---------- |
+| period            | `.`      |
+| comma             | `,`      |
+| question mark     | `?`      |
+| exclamation mark  | `!`      |
+| colon             | `:`      |
+| semicolon         | `;`      |
+| new line          | `↵`     |
+| new paragraph     | `↵↵`   |
+| open parenthesis  | `(`      |
+| close parenthesis | `)`      |
+| dash / hyphen     | `-`      |
+| ellipsis          | `...`    |
 
-- "period" → `.`
-- "comma" → `,`
-- "question mark" → `?`
-- "exclamation mark" → `!`
-- "new line" → `↵`
-- "new paragraph" → `↵↵`
-- "colon" → `:`
-- "semicolon" → `;`
+## Settings
 
-### System Tray
+Open **Settings** from the tray icon. All changes apply immediately — no restart needed.
 
-Right-click the system tray icon for:
+| Setting                     | Description                                               |
+| --------------------------- | --------------------------------------------------------- |
+| Language                    | Speech recognition language                               |
+| Custom API key              | Override the built-in Chromium key for the free API       |
+| Use Google Cloud Speech API | Switch to the Cloud API (requires credentials)            |
+| Silence end                 | How long a pause ends the phrase (~62 ms per chunk)       |
+| Sensitivity                 | RMS threshold multiplier — lower picks up quieter voices |
+| Hotkey                      | Click the button and press any modifier+key combination   |
+| Max duration                | Hard timeout for a single dictation session               |
+| Add punctuation             | Enable spoken punctuation commands                        |
 
-- Start/Stop Dictation
-- Settings
-- Quit
+### Google Cloud Speech API (optional)
 
-## Configuration
+For higher accuracy, enable the Cloud API and set credentials:
 
-Configuration file location: `~/.config/gotalk-dictation/config.json`
+```bash
+export GOOGLE_APPLICATION_CREDENTIALS="/path/to/service-account-key.json"
+# or run: gcloud auth application-default login
+```
+
+Without credentials the free public endpoint is used — no account needed.
+
+## Configuration file
+
+`~/.config/gotalk-dictation/config.json` is written automatically by the Settings window.
 
 ```json
 {
-  "hotkey": "Alt+D",
+  "hotkey": "Alt-d",
   "language": "en-US",
-  "timeout": 30,
-  "phrase_time_limit": 60,
-  "enable_punctuation": true,
-  "enable_notifications": true,
+  "timeout": 60,
+  "silence_chunks": 12,
+  "sensitivity": 2.5,
+  "api_key": "",
+  "use_advanced_api": false,
+  "enable_punctuation": true
 }
 ```
 
-## Development
+## Project structure
 
-### Project Structure
-
-**main.go**
-
-- Application initialization
-- Window management
-- Main event loop
-
-**internal/speech/recognizer.go**
-
-- Google Cloud Speech API integration
-- Audio streaming
-- Real-time transcription
-- Language detection
-
-**internal/audio/recorder.go**
-
-- ALSA/PulseAudio audio capture
-- Microphone input handling
-- Audio buffer management
-- Format conversion (PCM → WAV)
-
-**internal/hotkey/manager.go**
-
-- Global hotkey registration using robotgo
-- X11 event monitoring
-- Hotkey conflict detection
-
-**internal/ui/tray.go**
-
-- System tray icon with fyne/systray
-- Context menu
-- Status indicators (listening, idle, error)
-
-**internal/ui/settings.go**
-
-- Fyne settings window
-- Language selection
-- Hotkey customization
-- Audio device selection
-
-**internal/ui/history.go**
-
-- Dictation history viewer
-- Search and filter
-- Copy to clipboard
-- Delete history items
-
-**internal/config/config.go**
-
-- JSON configuration file management
-- Default settings
-- Config validation
-- Hot reload support
-
-**internal/typing/typer.go**
-
-- X11 keyboard simulation via xdotool
-- Text insertion at cursor
-- Special character handling
-- Wayland compatibility (future)
-
-### Key Technical Details
-
-**Audio Recording**
-
-```go
-// Use ALSA to capture microphone input
-// Format: 16-bit PCM, 16000 Hz mono (required by Google Speech API)
-// Buffer size: 4096 samples
-// Use Go channels for streaming audio data
 ```
-
-**Speech Recognition**
-
-```go
-// Use cloud.google.com/go/speech/apiv1
-// StreamingRecognize for real-time transcription
-// RecognitionConfig:
-//   - Encoding: LINEAR16
-//   - SampleRateHertz: 16000
-//   - LanguageCode: from config (default: en-US)
-//   - EnableAutomaticPunctuation: false (we handle it manually)
+gotalk-dictation/
+├── main.go
+└── internal/
+    ├── audio/recorder.go      — mic capture via arecord
+    ├── config/config.go       — load/save ~/.config/gotalk-dictation/config.json
+    ├── hotkey/manager.go      — global X11 key grab
+    ├── speech/
+    │   ├── recognizer.go      — VAD + free/cloud API
+    │   └── flac.go            — pure Go FLAC encoder
+    ├── typing/typer.go        — xdotool text insertion + punctuation
+    └── ui/
+        ├── tray.go            — Fyne system tray + menu
+        ├── settings.go        — settings window
+        └── popup.go           — X11 animated overlay
 ```
-
-**Global Hotkey**
-
-```go
-// Use robotgo.EventHook for X11 keyboard events
-// Register hotkey combinations (e.g., Alt+D)
-// Handle conflicts gracefully
-// Wayland support: Use D-Bus portal API (future)
-```
-
-**Text Insertion**
-
-```go
-// Use xdotool for typing text at cursor position
-// Command: xdotool type --clearmodifiers -- "text"
-// Handle special characters and Unicode
-// Preserve clipboard contents
-```
-
-### Building
-
-```bash
-# Development build
-go build -o gotalk-dictation
-
-# Production build (optimized)
-go build -ldflags="-s -w" -o gotalk-dictation
-
-# Cross-compile for different architectures
-GOOS=linux GOARCH=amd64 go build -o gotalk-dictation-amd64
-GOOS=linux GOARCH=arm64 go build -o gotalk-dictation-arm64
-```
-
-### Testing
-
-```bash
-# Run tests
-go test ./...
-
-# Run tests with coverage
-go test -cover ./...
-
-# Run specific test
-go test -v ./internal/speech/
-
-# Benchmark
-go test -bench=. ./internal/audio/
-```
-
-## Packaging
-
-### Flatpak
-
-```bash
-# Build Flatpak
-flatpak-builder build com.alijeyrad.gotalk-dictation.yml
-
-# Install locally
-flatpak-builder --user --install build com.alijeyrad.gotalk-dictation.yml
-
-# Run
-flatpak run com.alijeyrad.gotalk-dictation
-```
-
-### AppImage
-
-```bash
-# Use appimagetool
-wget https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
-chmod +x appimagetool-x86_64.AppImage
-
-# Create AppDir
-./scripts/create-appimage.sh
-
-# Build AppImage
-./appimagetool-x86_64.AppImage AppDir gotalk-dictation.AppImage
-```
-
-## Roadmap
-
-- [ ] Core dictation functionality (v0.1.0)
-
-  - [X] Google Cloud Speech integration
-  - [X] Audio recording
-  - [X] Global hotkey
-  - [X] Text insertion
-  - [ ] Basic UI
-- [ ] Enhanced features (v0.2.0)
-
-  - [ ] Punctuation commands
-  - [ ] Multi-language support
-  - [ ] Settings window
-  - [ ] System tray
-- [ ] Advanced features (v0.3.0)
-
-  - [ ] Dictation history
-  - [ ] Custom commands
-  - [ ] Offline mode (Vosk integration)
-  - [ ] Wayland support
-- [ ] Polish & Distribution (v1.0.0)
-
-  - [ ] Flatpak package
-  - [ ] AppImage package
-  - [ ] Publish to Flathub
-  - [ ] Documentation website
-
-## Contributing
-
-Contributions are welcome! Please:
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
 
 ## License
 
-MIT License - see LICENSE file for details
-
-## Credits
-
-- Built with [Fyne](https://fyne.io/) - Cross-platform UI toolkit
-- Speech recognition powered by [Google Cloud Speech-to-Text](https://cloud.google.com/speech-to-text)
-- Global hotkeys via [RobotGo](https://github.com/go-vgo/robotgo)
-- Icon design: [Your name/attribution]
-
-## Support
-
-- 🐛 Report bugs: [GitHub Issues](https://github.com/Alijeyrad/gotalk-dictation/issues)
-- 💬 Discussions: [GitHub Discussions](https://github.com/Alijeyrad/gotalk-dictation/discussions)
-- 📧 Email: alijrad.dev@gmail.com
+MIT — see LICENSE file.
 
 ---
 
-**Made with ❤️ by Ali Julaee Rad**
+### 👤 Ali Julaee Rad
+
+[![GitHub followers](https://img.shields.io/github/followers/alijeyrad?label=Follow&style=social)](https://github.com/alijeyrad)
+
+- **GitHub**: [alijeyrad](https://github.com/alijeyrad)
+- **LinkedIn**: [in/ali-julaee-rad](https://www.linkedin.com/in/ali-julaee-rad/)
+- **Email**: [alijrad.dev@gmail.com](mailto:alijrad.dev@gmail.com)

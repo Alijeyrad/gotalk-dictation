@@ -7,40 +7,28 @@ import (
 )
 
 type Config struct {
-	// Hotkey is the global keyboard shortcut, e.g. "Alt-d".
-	Hotkey string `json:"hotkey"`
+	Hotkey     string `json:"hotkey"`
+	UndoHotkey string `json:"undo_hotkey"`
+	Language   string `json:"language"`
+	Timeout    int    `json:"timeout"`
 
-	// Language is the BCP-47 language code sent to the speech API, e.g. "en-US".
-	Language string `json:"language"`
-
-	// Timeout is the maximum total recording+recognition time in seconds.
-	Timeout int `json:"timeout"`
-
-	// SilenceChunks is how many consecutive silent audio chunks (each ~62 ms)
-	// must follow speech before the phrase is considered finished.
-	// Higher = more patient pauses; lower = cuts off faster. Default 12 (~0.75 s).
+	// SilenceChunks is consecutive silent chunks (~62 ms each) that end a phrase.
 	SilenceChunks int `json:"silence_chunks"`
 
-	// Sensitivity is the RMS threshold multiplier for speech detection.
-	// Lower = more sensitive (picks up quiet voices); higher = ignores more noise.
-	// Range 1.0–6.0, default 2.5.
+	// Sensitivity is the RMS threshold multiplier (lower = more sensitive, range 1–6).
 	Sensitivity float64 `json:"sensitivity"`
 
-	// APIKey overrides the default public Chromium key for the free speech API.
-	// Leave blank to use the built-in key.
-	APIKey string `json:"api_key,omitempty"`
-
-	// UseAdvancedAPI forces use of the Google Cloud Speech API.
-	// Requires GOOGLE_APPLICATION_CREDENTIALS or gcloud ADC to be configured.
-	UseAdvancedAPI bool `json:"use_advanced_api"`
-
-	// EnablePunctuation adds punctuation to transcripts (typer level).
-	EnablePunctuation bool `json:"enable_punctuation"`
+	// APIKey overrides the built-in Chromium key for the free speech API.
+	APIKey            string `json:"api_key,omitempty"`
+	UseAdvancedAPI    bool   `json:"use_advanced_api"`
+	EnablePunctuation bool   `json:"enable_punctuation"`
+	PushToTalk        bool   `json:"push_to_talk"`
 }
 
 func Default() *Config {
 	return &Config{
 		Hotkey:            "Alt-d",
+		UndoHotkey:        "Alt-z",
 		Language:          "en-US",
 		Timeout:           60,
 		SilenceChunks:     12,
@@ -70,7 +58,6 @@ func Load() (*Config, error) {
 	if err := json.Unmarshal(data, cfg); err != nil {
 		return nil, err
 	}
-	// Clamp loaded values to valid ranges.
 	if cfg.SilenceChunks < 1 {
 		cfg.SilenceChunks = 12
 	}

@@ -7,15 +7,11 @@ import (
 	"os/exec"
 )
 
-// Recorder captures microphone audio using arecord.
-// Output format: 16-bit signed little-endian PCM, 16000 Hz, mono.
 type Recorder struct {
 	cmd    *exec.Cmd
 	cancel context.CancelFunc
 }
 
-// Start begins recording and returns a channel of raw PCM audio chunks.
-// The channel is closed when recording stops.
 func (r *Recorder) Start(ctx context.Context) (<-chan []byte, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	r.cancel = cancel
@@ -56,7 +52,7 @@ func (r *Recorder) Start(ctx context.Context) (<-chan []byte, error) {
 			}
 			if err != nil {
 				if err != io.EOF {
-					// arecord exited or context canceled
+					return
 				}
 				return
 			}
@@ -66,7 +62,6 @@ func (r *Recorder) Start(ctx context.Context) (<-chan []byte, error) {
 	return ch, nil
 }
 
-// Stop terminates the recording.
 func (r *Recorder) Stop() {
 	if r.cancel != nil {
 		r.cancel()

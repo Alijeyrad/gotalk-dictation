@@ -15,19 +15,32 @@ import (
 	"github.com/Alijeyrad/gotalk-dictation/internal/config"
 )
 
-// OpenSettings shows the settings window.
-// Must be called from the Fyne main goroutine (e.g. inside a menu callback).
-func OpenSettings(fyneApp fyne.App, cfg *config.Config, onSave func(*config.Config)) {
-	showSettingsWindow(fyneApp, cfg, onSave)
-}
-
-// languages is the ordered list shown in the language dropdown.
 var languages = []struct{ code, label string }{
-	{"en-US", "English (US)"},
-	{"es-ES", "Spanish"},
 	{"fa-IR", "Persian (Farsi)"},
-	{"fr-FR", "French"},
+	{"en-US", "English (US)"},
+	{"en-GB", "English (UK)"},
+	{"es-ES", "Spanish (Spain)"},
+	{"es-MX", "Spanish (Mexico)"},
+	{"es-419", "Spanish (Latin America)"},
+	{"fr-FR", "French (France)"},
+	{"fr-CA", "French (Canada)"},
 	{"de-DE", "German"},
+	{"it-IT", "Italian"},
+	{"pt-PT", "Portuguese (Portugal)"},
+	{"pt-BR", "Portuguese (Brazil)"},
+	{"ar-SA", "Arabic (Saudi Arabia)"},
+	{"ar-EG", "Arabic (Egypt)"},
+	{"zh-CN", "Chinese (Simplified)"},
+	{"zh-TW", "Chinese (Traditional)"},
+	{"nl-NL", "Dutch"},
+	{"hi-IN", "Hindi"},
+	{"ja-JP", "Japanese"},
+	{"ko-KR", "Korean"},
+	{"pl-PL", "Polish"},
+	{"ru-RU", "Russian"},
+	{"sv-SE", "Swedish"},
+	{"tr-TR", "Turkish"},
+	{"uk-UA", "Ukrainian"},
 }
 
 func showSettingsWindow(fyneApp fyne.App, cfg *config.Config, onSave func(*config.Config)) {
@@ -36,7 +49,6 @@ func showSettingsWindow(fyneApp fyne.App, cfg *config.Config, onSave func(*confi
 	w.Resize(fyne.NewSize(460, 500))
 	w.SetFixedSize(true)
 
-	// ---- Language dropdown ----
 	langLabels := make([]string, len(languages))
 	labelToCode := make(map[string]string, len(languages))
 	codeToLabel := make(map[string]string, len(languages))
@@ -48,12 +60,11 @@ func showSettingsWindow(fyneApp fyne.App, cfg *config.Config, onSave func(*confi
 
 	initialLabel := codeToLabel[cfg.Language]
 	if initialLabel == "" {
-		initialLabel = cfg.Language // unknown code: show raw
+		initialLabel = cfg.Language
 	}
 	langSelect := widget.NewSelect(langLabels, nil)
 	langSelect.SetSelected(initialLabel)
 
-	// ---- Speech recognition ----
 	apiKeyEntry := widget.NewPasswordEntry()
 	apiKeyEntry.SetText(cfg.APIKey)
 	apiKeyEntry.SetPlaceHolder("Leave blank to use built-in key")
@@ -65,7 +76,6 @@ func showSettingsWindow(fyneApp fyne.App, cfg *config.Config, onSave func(*confi
 		fyne.TextAlignLeading, fyne.TextStyle{Italic: true},
 	)
 
-	// ---- VAD tuning ----
 	silenceLabel := widget.NewLabel(fmt.Sprintf("%.0f chunks (~%.0f ms)",
 		float64(cfg.SilenceChunks), float64(cfg.SilenceChunks)*62))
 	silenceSlider := widget.NewSlider(4, 32)
@@ -76,23 +86,21 @@ func showSettingsWindow(fyneApp fyne.App, cfg *config.Config, onSave func(*confi
 	sensitivitySlider.Step = 0.1
 	sensitivitySlider.SetValue(cfg.Sensitivity)
 
-	// ---- Hotkey capture ----
-	// currentHotkey holds the value that will be written on Save.
 	currentHotkey := cfg.Hotkey
-	capturing := false
+	currentUndoHotkey := cfg.UndoHotkey
 
-	// updateSaveBtn is declared here so hotkeyBtn's closure can reference it
-	// before the body is assigned below (Go closures capture the variable).
+	// updateSaveBtn is declared before the hotkey buttons so closures can
+	// reference it; the body is assigned further below.
 	var updateSaveBtn func()
 
-	hotkeyBtn := widget.NewButton(cfg.Hotkey, nil)
-
-	// heldMods tracks which modifiers are currently pressed manually,
-	// because CurrentKeyModifiers() is unreliable on KDE Wayland.
+	// heldMods tracks pressed modifiers manually because
+	// desktop.Driver.CurrentKeyModifiers() is unreliable on KDE Wayland.
 	var heldMods fyne.KeyModifier
+	// activeCapture points to the button currently waiting for a key combination.
+	var activeCapture *widget.Button
 
 	stopCapture := func() {
-		capturing = false
+		activeCapture = nil
 		heldMods = 0
 		if dc, ok := w.Canvas().(desktop.Canvas); ok {
 			dc.SetOnKeyDown(nil)
@@ -100,22 +108,16 @@ func showSettingsWindow(fyneApp fyne.App, cfg *config.Config, onSave func(*confi
 		}
 	}
 
-	hotkeyBtn.OnTapped = func() {
-		if capturing {
-			// Second tap cancels capture.
-			stopCapture()
-			hotkeyBtn.SetText(currentHotkey)
-			return
-		}
-
+	// startCapture wires the canvas key handlers to capture one key combination
+	// into *target, then updates btn's label and calls onChange.
+	startCapture := func(btn *widget.Button, target *string, onChange func()) {
 		dc, ok := w.Canvas().(desktop.Canvas)
 		if !ok {
 			return
 		}
-
-		capturing = true
+		activeCapture = btn
 		heldMods = 0
-		hotkeyBtn.SetText("Press key combination…")
+		btn.SetText("Press key combination…")
 
 		dc.SetOnKeyUp(func(ev *fyne.KeyEvent) {
 			n := strings.ToLower(string(ev.Name))
@@ -132,13 +134,10 @@ func showSettingsWindow(fyneApp fyne.App, cfg *config.Config, onSave func(*confi
 		})
 
 		dc.SetOnKeyDown(func(ev *fyne.KeyEvent) {
-			if !capturing {
+			if activeCapture != btn {
 				return
 			}
-
 			n := strings.ToLower(string(ev.Name))
-
-			// Track modifier key presses; don't treat them as the captured key.
 			switch {
 			case strings.Contains(n, "control"):
 				heldMods |= fyne.KeyModifierControl
@@ -156,20 +155,17 @@ func showSettingsWindow(fyneApp fyne.App, cfg *config.Config, onSave func(*confi
 				return
 			}
 
-			// Escape cancels capture without changing the hotkey.
 			if ev.Name == fyne.KeyEscape {
 				stopCapture()
-				hotkeyBtn.SetText(currentHotkey)
+				btn.SetText(*target)
 				return
 			}
 
-			// Require at least one of Alt/Ctrl/Super (Shift alone not enough).
-			meaningful := heldMods & (fyne.KeyModifierAlt | fyne.KeyModifierControl | fyne.KeyModifierSuper)
-			if meaningful == 0 {
+			// Require at least one of Alt/Ctrl/Super; Shift alone is not enough.
+			if heldMods&(fyne.KeyModifierAlt|fyne.KeyModifierControl|fyne.KeyModifierSuper) == 0 {
 				return
 			}
 
-			// Build "Ctrl-Alt-Shift-Super-key" string.
 			var parts []string
 			if heldMods&fyne.KeyModifierControl != 0 {
 				parts = append(parts, "Ctrl")
@@ -183,19 +179,35 @@ func showSettingsWindow(fyneApp fyne.App, cfg *config.Config, onSave func(*confi
 			if heldMods&fyne.KeyModifierSuper != 0 {
 				parts = append(parts, "Super")
 			}
-			// Key name: use lowercase single char or named key as-is.
 			parts = append(parts, n)
-			hotkey := strings.Join(parts, "-")
 
 			stopCapture()
-			currentHotkey = hotkey
-			hotkeyBtn.SetText(hotkey)
-			updateSaveBtn()
+			*target = strings.Join(parts, "-")
+			btn.SetText(*target)
+			onChange()
 		})
 	}
 
+	hotkeyBtn := widget.NewButton(cfg.Hotkey, nil)
+	hotkeyBtn.OnTapped = func() {
+		if activeCapture == hotkeyBtn {
+			stopCapture()
+			hotkeyBtn.SetText(currentHotkey)
+			return
+		}
+		startCapture(hotkeyBtn, &currentHotkey, func() { updateSaveBtn() })
+	}
 
-	// ---- General ----
+	undoHotkeyBtn := widget.NewButton(cfg.UndoHotkey, nil)
+	undoHotkeyBtn.OnTapped = func() {
+		if activeCapture == undoHotkeyBtn {
+			stopCapture()
+			undoHotkeyBtn.SetText(currentUndoHotkey)
+			return
+		}
+		startCapture(undoHotkeyBtn, &currentUndoHotkey, func() { updateSaveBtn() })
+	}
+
 	timeoutEntry := widget.NewEntry()
 	timeoutEntry.SetText(strconv.Itoa(cfg.Timeout))
 	timeoutEntry.SetPlaceHolder("seconds (default 60)")
@@ -203,14 +215,15 @@ func showSettingsWindow(fyneApp fyne.App, cfg *config.Config, onSave func(*confi
 	punctCheck := widget.NewCheck("Add punctuation", nil)
 	punctCheck.SetChecked(cfg.EnablePunctuation)
 
-	// ---- Buttons ----
+	pushToTalkCheck := widget.NewCheck("Push-to-talk (hold key to record, release to submit)", nil)
+	pushToTalkCheck.SetChecked(cfg.PushToTalk)
+
 	saveBtn := widget.NewButton("Save", nil)
 	saveBtn.Importance = widget.HighImportance
 	saveBtn.Disable()
 
 	closeBtn := widget.NewButton("Close", nil)
 
-	// currentLang returns the BCP-47 code for the currently selected label.
 	currentLang := func() string {
 		if code, ok := labelToCode[langSelect.Selected]; ok {
 			return code
@@ -218,7 +231,6 @@ func showSettingsWindow(fyneApp fyne.App, cfg *config.Config, onSave func(*confi
 		return langSelect.Selected
 	}
 
-	// hasChanges returns true if any widget differs from the original cfg.
 	hasChanges := func() bool {
 		timeout, err := strconv.Atoi(timeoutEntry.Text)
 		if err != nil || timeout < 5 {
@@ -230,8 +242,10 @@ func showSettingsWindow(fyneApp fyne.App, cfg *config.Config, onSave func(*confi
 			int(silenceSlider.Value) != cfg.SilenceChunks ||
 			fmt.Sprintf("%.1f", sensitivitySlider.Value) != fmt.Sprintf("%.1f", cfg.Sensitivity) ||
 			currentHotkey != cfg.Hotkey ||
+			currentUndoHotkey != cfg.UndoHotkey ||
 			timeout != cfg.Timeout ||
-			punctCheck.Checked != cfg.EnablePunctuation
+			punctCheck.Checked != cfg.EnablePunctuation ||
+			pushToTalkCheck.Checked != cfg.PushToTalk
 	}
 
 	updateSaveBtn = func() {
@@ -255,8 +269,8 @@ func showSettingsWindow(fyneApp fyne.App, cfg *config.Config, onSave func(*confi
 	}
 	timeoutEntry.OnChanged = func(_ string) { updateSaveBtn() }
 	punctCheck.OnChanged = func(_ bool) { updateSaveBtn() }
+	pushToTalkCheck.OnChanged = func(_ bool) { updateSaveBtn() }
 
-	// doSave builds the new config from current widget values and calls onSave.
 	doSave := func() {
 		timeout, err := strconv.Atoi(timeoutEntry.Text)
 		if err != nil || timeout < 5 {
@@ -264,6 +278,7 @@ func showSettingsWindow(fyneApp fyne.App, cfg *config.Config, onSave func(*confi
 		}
 		newCfg := &config.Config{
 			Hotkey:            currentHotkey,
+			UndoHotkey:        currentUndoHotkey,
 			Language:          currentLang(),
 			Timeout:           timeout,
 			SilenceChunks:     int(silenceSlider.Value),
@@ -271,23 +286,22 @@ func showSettingsWindow(fyneApp fyne.App, cfg *config.Config, onSave func(*confi
 			APIKey:            apiKeyEntry.Text,
 			UseAdvancedAPI:    advancedCheck.Checked,
 			EnablePunctuation: punctCheck.Checked,
+			PushToTalk:        pushToTalkCheck.Checked,
 		}
 		onSave(newCfg)
-		// Update cfg baseline so Save disables again.
 		*cfg = *newCfg
 		saveBtn.Disable()
 	}
 
 	saveBtn.OnTapped = func() { doSave() }
 
-	// tryClose prompts for unsaved changes, then closes.
 	tryClose := func() {
 		if !hasChanges() {
 			stopCapture()
 			w.Close()
 			return
 		}
-		d := dialog.NewCustomConfirm(
+		dialog.NewCustomConfirm(
 			"Unsaved changes",
 			"Save", "Discard",
 			widget.NewLabel("You have unsaved changes."),
@@ -299,14 +313,12 @@ func showSettingsWindow(fyneApp fyne.App, cfg *config.Config, onSave func(*confi
 				w.Close()
 			},
 			w,
-		)
-		d.Show()
+		).Show()
 	}
 
 	closeBtn.OnTapped = tryClose
 	w.SetCloseIntercept(tryClose)
 
-	// ---- Layout ----
 	form := container.New(layout.NewFormLayout(),
 		widget.NewLabelWithStyle("Language", fyne.TextAlignTrailing, fyne.TextStyle{Bold: true}),
 		langSelect,
@@ -332,17 +344,19 @@ func showSettingsWindow(fyneApp fyne.App, cfg *config.Config, onSave func(*confi
 		widget.NewLabelWithStyle("Hotkey", fyne.TextAlignTrailing, fyne.TextStyle{Bold: true}),
 		hotkeyBtn,
 
+		widget.NewLabelWithStyle("Undo hotkey", fyne.TextAlignTrailing, fyne.TextStyle{Bold: true}),
+		undoHotkeyBtn,
+
 		widget.NewLabelWithStyle("Max duration", fyne.TextAlignTrailing, fyne.TextStyle{Bold: true}),
 		container.NewBorder(nil, nil, nil, widget.NewLabel("sec"), timeoutEntry),
 
 		widget.NewLabel(""),
 		punctCheck,
+
+		widget.NewLabel(""),
+		pushToTalkCheck,
 	)
 
-	buttons := container.NewHBox(layout.NewSpacer(), closeBtn, saveBtn)
-	content := container.NewBorder(nil, buttons, nil, nil, container.NewVScroll(form))
-
-	w.SetContent(content)
+	w.SetContent(container.NewBorder(nil, container.NewHBox(layout.NewSpacer(), closeBtn, saveBtn), nil, nil, container.NewVScroll(form)))
 	w.Show()
 }
-

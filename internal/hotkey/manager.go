@@ -2,22 +2,19 @@ package hotkey
 
 import (
 	"fmt"
-	"log"
 	"strings"
 
 	"github.com/jezek/xgb"
 	"github.com/jezek/xgb/xproto"
 )
 
-// Manager registers and listens for a global X11 hotkey.
 type Manager struct {
-	conn     *xgb.Conn
-	keycode  xproto.Keycode
-	modMask  uint16
-	stopCh   chan struct{}
+	conn    *xgb.Conn
+	keycode xproto.Keycode
+	modMask uint16
+	stopCh  chan struct{}
 }
 
-// New creates a Manager for the given hotkey string (e.g. "Alt-d").
 func New(hotkey string) (*Manager, error) {
 	conn, err := xgb.NewConn()
 	if err != nil {
@@ -38,27 +35,45 @@ func New(hotkey string) (*Manager, error) {
 	}, nil
 }
 
-// Register grabs the hotkey globally and starts the event loop.
-// callback is invoked in a new goroutine on each keypress.
-func (m *Manager) Register(callback func()) error {
+func (m *Manager) grab() error {
 	root := xproto.Setup(m.conn).DefaultScreen(m.conn).Root
 
-	// Grab key with common modifier combinations to handle NumLock/CapsLock state.
+	// Grab with NumLock/CapsLock modifier combinations so the hotkey works
+	// regardless of lock key state.
 	extras := []uint16{0, uint16(xproto.ModMask2), uint16(xproto.ModMaskLock), uint16(xproto.ModMask2) | uint16(xproto.ModMaskLock)}
 	for _, extra := range extras {
 		mod := m.modMask | extra
-		err := xproto.GrabKeyChecked(m.conn, true, root, mod, m.keycode,
-			xproto.GrabModeAsync, xproto.GrabModeAsync).Check()
-		if err != nil {
+		if err := xproto.GrabKeyChecked(m.conn, true, root, mod, m.keycode,
+			xproto.GrabModeAsync, xproto.GrabModeAsync).Check(); err != nil {
 			return fmt.Errorf("grabbing key (mod=%d): %w", mod, err)
 		}
 	}
-
-	go m.eventLoop(callback)
 	return nil
 }
 
-func (m *Manager) eventLoop(callback func()) {
+func (m *Manager) Register(onPress func()) error {
+	if err := m.grab(); err != nil {
+		return err
+	}
+	go m.eventLoop(onPress, nil)
+	return nil
+}
+
+// RegisterPushToTalk registers both press and release callbacks for
+// push-to-talk mode. onPress fires on key down, onRelease on key up.
+func (m *Manager) RegisterPushToTalk(onPress, onRelease func()) error {
+	if err := m.grab(); err != nil {
+		return err
+	}
+	xproto.ChangeWindowAttributes(m.conn, //nolint:errcheck
+		xproto.Setup(m.conn).DefaultScreen(m.conn).Root,
+		xproto.CwEventMask,
+		[]uint32{uint32(xproto.EventMaskKeyPress | xproto.EventMaskKeyRelease)})
+	go m.eventLoop(onPress, onRelease)
+	return nil
+}
+
+func (m *Manager) eventLoop(onPress, onRelease func()) {
 	for {
 		select {
 		case <-m.stopCh:
@@ -68,20 +83,25 @@ func (m *Manager) eventLoop(callback func()) {
 
 		ev, err := m.conn.WaitForEvent()
 		if err != nil {
-			log.Printf("hotkey: X11 event error: %v", err)
 			return
 		}
 		if ev == nil {
 			return
 		}
 
-		if _, ok := ev.(xproto.KeyPressEvent); ok {
-			go callback()
+		switch ev.(type) {
+		case xproto.KeyPressEvent:
+			if onPress != nil {
+				go onPress()
+			}
+		case xproto.KeyReleaseEvent:
+			if onRelease != nil {
+				go onRelease()
+			}
 		}
 	}
 }
 
-// Stop terminates the event loop and closes the X11 connection.
 func (m *Manager) Stop() {
 	select {
 	case <-m.stopCh:
@@ -91,7 +111,6 @@ func (m *Manager) Stop() {
 	m.conn.Close()
 }
 
-// parseHotkey parses a string like "Alt-d" or "Ctrl+Shift-a" into a keycode and modifier mask.
 func parseHotkey(conn *xgb.Conn, hotkey string) (xproto.Keycode, uint16, error) {
 	parts := strings.FieldsFunc(hotkey, func(r rune) bool {
 		return r == '+' || r == '-'
@@ -127,7 +146,6 @@ func parseHotkey(conn *xgb.Conn, hotkey string) (xproto.Keycode, uint16, error) 
 	return keycode, modMask, nil
 }
 
-// findKeycode maps a key name (single char or named key) to an X11 keycode.
 func findKeycode(conn *xgb.Conn, keyName string) (xproto.Keycode, error) {
 	setup := xproto.Setup(conn)
 	min := setup.MinKeycode
@@ -140,10 +158,8 @@ func findKeycode(conn *xgb.Conn, keyName string) (xproto.Keycode, error) {
 
 	var targetKeysym uint32
 	if len(keyName) == 1 {
-		// ASCII characters map directly to keysyms
 		targetKeysym = uint32(keyName[0])
 	} else {
-		// Named keys
 		switch strings.ToLower(keyName) {
 		case "space":
 			targetKeysym = 0x0020
@@ -185,8 +201,7 @@ func findKeycode(conn *xgb.Conn, keyName string) (xproto.Keycode, error) {
 	keysymsPerKeycode := int(km.KeysymsPerKeycode)
 	for i, keysym := range km.Keysyms {
 		if uint32(keysym) == targetKeysym {
-			keycode := min + xproto.Keycode(i/keysymsPerKeycode)
-			return keycode, nil
+			return min + xproto.Keycode(i/keysymsPerKeycode), nil
 		}
 	}
 

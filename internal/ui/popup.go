@@ -1,8 +1,5 @@
 package ui
 
-// Pure X11 floating indicator — override-redirect, non-focusable, always on top.
-// No text. Animated icons only. Positioned above the active window.
-
 import (
 	"context"
 	"fmt"
@@ -20,30 +17,33 @@ import (
 type popState int
 
 const (
-	stHidden    popState = iota
-	stListening          // pulsing red dot
-	stProcessing         // spinning blue arc
-	stDone               // green flash, then auto-hide
-	stError              // red flash, then auto-hide
+	stHidden     popState = iota
+	stListening           // pulsing red dot
+	stProcessing          // spinning blue arc
+	stDone                // green flash, then auto-hide
+	stError               // red flash, then auto-hide
 )
 
 const (
-	popSz = 44 // window is a 44×44 square
+	popSz = 44
 	popCX = popSz / 2
 	popCY = popSz / 2
-	popBG = uint32(0x1C1C1E) // ~Apple dark bg
+	popBG = uint32(0x1C1C1E)
 )
 
-// X11Popup is a chromeless, non-focusable overlay drawn directly via X11.
 type X11Popup struct {
-	mu     sync.Mutex // guards state only
+	mu     sync.Mutex
 	conn   *xgb.Conn
 	screen *xproto.ScreenInfo
 	wid    xproto.Window
 	gc     xproto.Gcontext
-
 	state  popState
 	stopCh chan struct{}
+
+	hasFont  bool
+	textFont xproto.Font
+	textGC   xproto.Gcontext
+	preview  string
 }
 
 func newX11Popup() (*X11Popup, error) {
@@ -76,14 +76,14 @@ func (p *X11Popup) init() error {
 		xproto.CwBackPixel|xproto.CwOverrideRedirect|xproto.CwEventMask,
 		[]uint32{
 			popBG,
-			1, // override_redirect: bypass WM — no title bar, no focus steal
+			1, // override_redirect: bypass WM so there's no title bar and no focus steal
 			xproto.EventMaskExposure,
 		},
 	).Check(); err != nil {
 		return fmt.Errorf("create window: %w", err)
 	}
 
-	// Compositor hints (best-effort; non-fatal if unsupported)
+	// Best-effort compositor hints; non-fatal if the WM doesn't support them.
 	p.setAtomProp("_NET_WM_WINDOW_TYPE", "_NET_WM_WINDOW_TYPE_NOTIFICATION")
 	p.setAtomProp("_NET_WM_STATE", "_NET_WM_STATE_ABOVE")
 
@@ -92,10 +92,30 @@ func (p *X11Popup) init() error {
 		return err
 	}
 	p.gc = gc
-	return xproto.CreateGCChecked(p.conn, gc, xproto.Drawable(wid),
+	if err := xproto.CreateGCChecked(p.conn, gc, xproto.Drawable(wid),
 		xproto.GcForeground|xproto.GcBackground|xproto.GcLineWidth,
 		[]uint32{0xFFFFFF, popBG, 2},
-	).Check()
+	).Check(); err != nil {
+		return err
+	}
+
+	// Try to load a server-side font for the Done-state text preview.
+	// Fails silently on systems without X11 fonts; falls back to circle.
+	if fid, err := xproto.NewFontId(p.conn); err == nil {
+		if xproto.OpenFontChecked(p.conn, fid, uint16(len("fixed")), "fixed").Check() == nil {
+			if tgc, err2 := xproto.NewGcontextId(p.conn); err2 == nil {
+				if xproto.CreateGCChecked(p.conn, tgc, xproto.Drawable(wid),
+					xproto.GcForeground|xproto.GcBackground|xproto.GcFont,
+					[]uint32{0xFFFFFF, popBG, uint32(fid)},
+				).Check() == nil {
+					p.hasFont = true
+					p.textFont = fid
+					p.textGC = tgc
+				}
+			}
+		}
+	}
+	return nil
 }
 
 func (p *X11Popup) setAtomProp(prop, val string) {
@@ -113,18 +133,21 @@ func (p *X11Popup) setAtomProp(prop, val string) {
 		[]byte{byte(a), byte(a >> 8), byte(a >> 16), byte(a >> 24)})
 }
 
-// ---------- public API -------------------------------------------------------
-
-// Show positions the popup near the text caret and starts the animation.
 func (p *X11Popup) Show(s popState) {
+	// Reset any leftover text preview from the previous Done state.
+	p.mu.Lock()
+	p.preview = ""
+	p.mu.Unlock()
+	xproto.ConfigureWindow(p.conn, p.wid, //nolint:errcheck
+		xproto.ConfigWindowWidth|xproto.ConfigWindowHeight, []uint32{popSz, popSz})
+
 	cx, cy := p.queryCaretPos()
-	// Place popup so its bottom edge is 10px above the target point.
 	x := i16clamp(cx-popSz/2, 0, int16(p.screen.WidthInPixels)-popSz)
 	y := i16clamp(cy-popSz-10, 0, int16(p.screen.HeightInPixels)-popSz)
 
 	xproto.ConfigureWindow(p.conn, p.wid, //nolint:errcheck
 		xproto.ConfigWindowX|xproto.ConfigWindowY, []uint32{uint32(x), uint32(y)})
-	xproto.MapWindow(p.conn, p.wid) //nolint:errcheck
+	xproto.MapWindow(p.conn, p.wid)       //nolint:errcheck
 	xproto.ConfigureWindow(p.conn, p.wid, //nolint:errcheck
 		xproto.ConfigWindowStackMode, []uint32{uint32(xproto.StackModeAbove)})
 
@@ -133,35 +156,76 @@ func (p *X11Popup) Show(s popState) {
 	p.mu.Unlock()
 }
 
-// SetState changes animation without moving the window.
 func (p *X11Popup) SetState(s popState) {
 	p.mu.Lock()
 	p.state = s
 	p.mu.Unlock()
 }
 
-// Hide removes the popup.
+// ShowDone switches to the Done state and displays a short text preview.
+// Only ASCII text is rendered; non-ASCII falls back to the green circle.
+func (p *X11Popup) ShowDone(text string) {
+	var preview string
+	if p.hasFont {
+		preview = asciiPreview(text, 13)
+	}
+
+	p.mu.Lock()
+	p.preview = preview
+	p.state = stDone
+	p.mu.Unlock()
+
+	if preview != "" {
+		w := uint32(len(preview)*7 + 20)
+		if w < 80 {
+			w = 80
+		}
+		xproto.ConfigureWindow(p.conn, p.wid, //nolint:errcheck
+			xproto.ConfigWindowWidth|xproto.ConfigWindowHeight, []uint32{w, 28})
+	}
+}
+
+// asciiPreview returns the first maxRunes ASCII characters of s followed by
+// "..." if truncated. Returns "" if s contains any non-ASCII character.
+func asciiPreview(s string, maxRunes int) string {
+	for _, r := range s {
+		if r > 127 {
+			return ""
+		}
+	}
+	runes := []rune(s)
+	if len(runes) > maxRunes {
+		return string(runes[:maxRunes]) + "..."
+	}
+	return s
+}
+
 func (p *X11Popup) Hide() {
 	p.mu.Lock()
 	p.state = stHidden
+	hadPreview := p.preview != ""
+	p.preview = ""
 	p.mu.Unlock()
+	if hadPreview {
+		xproto.ConfigureWindow(p.conn, p.wid, //nolint:errcheck
+			xproto.ConfigWindowWidth|xproto.ConfigWindowHeight, []uint32{popSz, popSz})
+	}
 	xproto.UnmapWindow(p.conn, p.wid) //nolint:errcheck
 }
 
-// Close shuts down the popup.
 func (p *X11Popup) Close() {
 	select {
 	case <-p.stopCh:
 	default:
 		close(p.stopCh)
 	}
+	if p.hasFont {
+		xproto.CloseFont(p.conn, p.textFont) //nolint:errcheck
+	}
 	xproto.DestroyWindow(p.conn, p.wid) //nolint:errcheck
 	p.conn.Close()
 }
 
-// ---------- animation --------------------------------------------------------
-
-// renderLoop drives animation at 20 fps.
 func (p *X11Popup) renderLoop() {
 	ticker := time.NewTicker(50 * time.Millisecond)
 	defer ticker.Stop()
@@ -171,9 +235,10 @@ func (p *X11Popup) renderLoop() {
 		case <-ticker.C:
 			p.mu.Lock()
 			s := p.state
+			preview := p.preview
 			p.mu.Unlock()
 			if s != stHidden {
-				p.drawFrame(s, frame)
+				p.drawFrame(s, preview, frame)
 				frame++
 			} else {
 				frame = 0
@@ -184,7 +249,6 @@ func (p *X11Popup) renderLoop() {
 	}
 }
 
-// eventLoop handles Expose events so the window redraws after being uncovered.
 func (p *X11Popup) eventLoop() {
 	for {
 		ev, err := p.conn.WaitForEvent()
@@ -194,9 +258,10 @@ func (p *X11Popup) eventLoop() {
 		if _, ok := ev.(xproto.ExposeEvent); ok {
 			p.mu.Lock()
 			s := p.state
+			preview := p.preview
 			p.mu.Unlock()
 			if s != stHidden {
-				p.drawFrame(s, 0)
+				p.drawFrame(s, preview, 0)
 			}
 		}
 		select {
@@ -207,13 +272,19 @@ func (p *X11Popup) eventLoop() {
 	}
 }
 
-func (p *X11Popup) drawFrame(s popState, frame int) {
+func (p *X11Popup) drawFrame(s popState, preview string, frame int) {
 	d := xproto.Drawable(p.wid)
-
-	// Clear background
+	clearW, clearH := uint16(popSz), uint16(popSz)
+	if preview != "" && s == stDone {
+		clearW = uint16(len(preview)*7 + 20)
+		if clearW < 80 {
+			clearW = 80
+		}
+		clearH = 28
+	}
 	p.setFG(popBG)
 	xproto.PolyFillRectangle(p.conn, d, p.gc, //nolint:errcheck
-		[]xproto.Rectangle{{0, 0, popSz, popSz}})
+		[]xproto.Rectangle{{X: 0, Y: 0, Width: clearW, Height: clearH}})
 
 	switch s {
 	case stListening:
@@ -221,20 +292,18 @@ func (p *X11Popup) drawFrame(s popState, frame int) {
 	case stProcessing:
 		p.drawProcessing(frame)
 	case stDone:
-		p.drawFlash(0x30D158) // Apple green
+		p.drawFlash(0x30D158, preview)
 	case stError:
-		p.drawFlash(0xFF3B30) // Apple red
+		p.drawFlash(0xFF3B30, "")
 	}
 }
 
-// drawListening draws a pulsing red dot.
 func (p *X11Popup) drawListening(frame int) {
-	t := float64(frame) * 2 * math.Pi / 40 // period = 40 frames = 2 s
-	r := int(12 + 5*math.Sin(t))            // radius 7–17 px
+	t := float64(frame) * 2 * math.Pi / 40
+	r := int(12 + 5*math.Sin(t))
 	p.fillCircle(popCX, popCY, r, 0xFF3B30)
 }
 
-// drawProcessing draws an iOS-style spinning arc.
 func (p *X11Popup) drawProcessing(frame int) {
 	const (
 		arcR    = uint16(17)
@@ -243,12 +312,11 @@ func (p *X11Popup) drawProcessing(frame int) {
 		arcY    = int16(popCY) - int16(arcR)
 		arcWH   = arcR * 2
 		fullArc = int16(360 * 64)
-		sweep   = int16(100 * 64) // arc sweep in 1/64°
+		sweep   = int16(100 * 64)
 	)
 
 	d := xproto.Drawable(p.wid)
 
-	// Dim background ring
 	xproto.ChangeGC(p.conn, p.gc, xproto.GcForeground|xproto.GcLineWidth, //nolint:errcheck
 		[]uint32{0x0A3060, lineW})
 	xproto.PolyArc(p.conn, d, p.gc, []xproto.Arc{{ //nolint:errcheck
@@ -256,21 +324,27 @@ func (p *X11Popup) drawProcessing(frame int) {
 		Angle1: 0, Angle2: fullArc,
 	}})
 
-	// Bright spinning arc — 1 revolution/second at 20 fps (18°/frame)
 	deg := int16((frame * 18) % 360)
 	xproto.ChangeGC(p.conn, p.gc, xproto.GcForeground, []uint32{0x0A84FF}) //nolint:errcheck
-	xproto.PolyArc(p.conn, d, p.gc, []xproto.Arc{{ //nolint:errcheck
+	xproto.PolyArc(p.conn, d, p.gc, []xproto.Arc{{                         //nolint:errcheck
 		X: arcX, Y: arcY, Width: arcWH, Height: arcWH,
 		Angle1: deg * 64, Angle2: sweep,
 	}})
 }
 
-// drawFlash draws a solid filled circle (for Done/Error states).
-func (p *X11Popup) drawFlash(color uint32) {
+func (p *X11Popup) drawFlash(color uint32, preview string) {
+	if preview != "" {
+		d := xproto.Drawable(p.wid)
+		// Small colored dot on the left, then the preview text.
+		p.setFG(color)
+		xproto.PolyFillArc(p.conn, d, p.gc, []xproto.Arc{{ //nolint:errcheck
+			X: 5, Y: 8, Width: 12, Height: 12, Angle1: 0, Angle2: 360 * 64,
+		}})
+		xproto.ImageText8(p.conn, uint8(len(preview)), d, p.textGC, 22, 19, preview) //nolint:errcheck
+		return
+	}
 	p.fillCircle(popCX, popCY, 17, color)
 }
-
-// ---------- helpers ----------------------------------------------------------
 
 func (p *X11Popup) fillCircle(x, y, r int, color uint32) {
 	p.setFG(color)
@@ -286,20 +360,13 @@ func (p *X11Popup) setFG(c uint32) {
 	xproto.ChangeGC(p.conn, p.gc, xproto.GcForeground, []uint32{c}) //nolint:errcheck
 }
 
-// queryCaretPos returns the best guess for the text caret's screen position.
-//
-// Strategy (first success wins):
-//  1. AT-SPI2 accessibility — queries the focused widget's caret extents
-//     via Python+gi. Gives the exact character position.
-//  2. xdotool getwindowfocus — center of the X11 input-focus window.
-//  3. Mouse pointer — last resort.
+// queryCaretPos returns the best-guess screen position for the text caret.
+// Strategy: AT-SPI2 (exact caret) → xdotool focused window top → mouse pointer.
 func (p *X11Popup) queryCaretPos() (int16, int16) {
-	// 1. AT-SPI2 caret position (exact).
 	if x, y, ok := queryCaretViaAtspi(); ok {
 		return int16(x), int16(y)
 	}
 
-	// 2. Top-center of focused window (just below title bar).
 	if out, err := exec.Command("xdotool", "getwindowfocus", "getwindowgeometry", "--shell").Output(); err == nil {
 		vals := parseShellVars(string(out))
 		x, y, w := vals["X"], vals["Y"], vals["WIDTH"]
@@ -308,22 +375,19 @@ func (p *X11Popup) queryCaretPos() (int16, int16) {
 		}
 	}
 
-	// 3. Mouse pointer.
 	if r, err := xproto.QueryPointer(p.conn, p.screen.Root).Reply(); err == nil {
 		return r.RootX, r.RootY
 	}
 	return int16(p.screen.WidthInPixels / 2), int16(p.screen.HeightInPixels / 2)
 }
 
-// queryCaretViaAtspi shells out to python3 with the AT-SPI2 GObject
-// introspection bindings to walk the accessibility tree and return the
-// screen coordinates of the text caret in the focused widget.
+// queryCaretViaAtspi shells out to python3+gi to read the focused widget's
+// caret position from the AT-SPI2 accessibility tree.
 func queryCaretViaAtspi() (x, y int, ok bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "python3", "-c", atspiScript)
-	out, err := cmd.Output()
+	out, err := exec.CommandContext(ctx, "python3", "-c", atspiScript).Output()
 	if err != nil {
 		return 0, 0, false
 	}
@@ -385,7 +449,6 @@ except:
     sys.exit(1)
 `
 
-// parseShellVars parses KEY=VALUE lines (like xdotool --shell output).
 func parseShellVars(s string) map[string]int {
 	m := make(map[string]int)
 	for _, line := range strings.Split(s, "\n") {
