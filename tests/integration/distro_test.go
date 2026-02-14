@@ -53,9 +53,9 @@ func findProjectRoot(t *testing.T) string {
 
 // testScript is the shell script run inside each container.
 const testScript = `set -e
-cp -r /src /workspace
+cp -r /src/. /workspace/
 cd /workspace
-cp /src/tests/integration/testdata/alsa_null.conf ~/.asoundrc
+cp tests/integration/testdata/alsa_null.conf ~/.asoundrc
 # Run unit tests (no X11 required).
 go test -v -count=1 ./...
 # Start Xvfb for X11 integration tests.
