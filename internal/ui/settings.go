@@ -12,15 +12,15 @@ import (
 	"github.com/Alijeyrad/gotalk-dictation/internal/config"
 )
 
-// OpenSettings shows the settings window. It is safe to call from any goroutine.
+// OpenSettings shows the settings window.
+// Must be called from the Fyne main goroutine (e.g. inside a menu callback).
 func OpenSettings(fyneApp fyne.App, cfg *config.Config, onSave func(*config.Config)) {
-	fyne.Do(func() {
-		showSettingsWindow(fyneApp, cfg, onSave)
-	})
+	showSettingsWindow(fyneApp, cfg, onSave)
 }
 
 func showSettingsWindow(fyneApp fyne.App, cfg *config.Config, onSave func(*config.Config)) {
 	w := fyneApp.NewWindow("GoTalk Dictation — Settings")
+	w.SetIcon(fyne.NewStaticResource("icon.png", iconPNG))
 	w.Resize(fyne.NewSize(460, 520))
 	w.SetFixedSize(true)
 
@@ -61,10 +61,6 @@ func showSettingsWindow(fyneApp fyne.App, cfg *config.Config, onSave func(*confi
 	hotkeyEntry := widget.NewEntry()
 	hotkeyEntry.SetText(cfg.Hotkey)
 	hotkeyEntry.SetPlaceHolder("e.g. Alt-d, Ctrl-space")
-	hotkeyNote := widget.NewLabelWithStyle(
-		"Hotkey change requires app restart",
-		fyne.TextAlignLeading, fyne.TextStyle{Italic: true},
-	)
 
 	timeoutEntry := widget.NewEntry()
 	timeoutEntry.SetText(strconv.Itoa(cfg.Timeout))
@@ -95,7 +91,6 @@ func showSettingsWindow(fyneApp fyne.App, cfg *config.Config, onSave func(*confi
 			EnablePunctuation: punctCheck.Checked,
 		}
 		onSave(newCfg)
-		w.Close()
 	}
 
 	// ---- Layout ----
@@ -123,8 +118,6 @@ func showSettingsWindow(fyneApp fyne.App, cfg *config.Config, onSave func(*confi
 
 		widget.NewLabelWithStyle("Hotkey", fyne.TextAlignTrailing, fyne.TextStyle{Bold: true}),
 		hotkeyEntry,
-		widget.NewLabel(""),
-		hotkeyNote,
 
 		widget.NewLabelWithStyle("Max duration", fyne.TextAlignTrailing, fyne.TextStyle{Bold: true}),
 		container.NewBorder(nil, nil, nil, widget.NewLabel("sec"), timeoutEntry),

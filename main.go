@@ -22,6 +22,9 @@ type app struct {
 	typer      *typing.Typer
 	tray       *ui.Tray
 
+	hkmMu sync.Mutex
+	hkm   *hotkey.Manager
+
 	mu          sync.Mutex
 	isListening bool
 	cancelDicta context.CancelFunc
@@ -48,29 +51,45 @@ func main() {
 	}
 	a.recognizer = buildRecognizer(cfg)
 
+	var startupErr error
+	hkm, err := hotkey.New(cfg.Hotkey)
+	if err != nil {
+		startupErr = err
+		log.Printf("WARNING: hotkey init failed: %v", err)
+	} else {
+		if err := hkm.Register(a.toggleDictation); err != nil {
+			startupErr = err
+			log.Printf("WARNING: hotkey %q already grabbed — remove old DE shortcut", cfg.Hotkey)
+		} else {
+			a.hkmMu.Lock()
+			a.hkm = hkm
+			a.hkmMu.Unlock()
+		}
+	}
+
 	a.tray.OnSettingsSave = func(newCfg *config.Config) {
+		log.Printf("settings save: hotkey=%q language=%q timeout=%d silenceChunks=%d sensitivity=%.1f punctuation=%v advancedAPI=%v",
+			newCfg.Hotkey, newCfg.Language, newCfg.Timeout, newCfg.SilenceChunks, newCfg.Sensitivity, newCfg.EnablePunctuation, newCfg.UseAdvancedAPI)
 		if err := newCfg.Save(); err != nil {
 			log.Printf("warning: failed to save config: %v", err)
 		}
+
+		a.cfgMu.RLock()
+		oldHotkey := a.cfg.Hotkey
+		a.cfgMu.RUnlock()
+
 		a.cfgMu.Lock()
 		a.cfg = newCfg
 		a.recognizer = buildRecognizer(newCfg)
 		a.typer = &typing.Typer{EnablePunctuation: newCfg.EnablePunctuation}
 		a.cfgMu.Unlock()
-		log.Println("settings saved and applied")
-	}
+		a.tray.UpdateConfig(newCfg)
 
-	var hotkeyErr error
-	hkm, err := hotkey.New(cfg.Hotkey)
-	if err != nil {
-		hotkeyErr = err
-		log.Printf("WARNING: hotkey init failed: %v", err)
-	} else {
-		if err := hkm.Register(a.toggleDictation); err != nil {
-			hotkeyErr = err
-			log.Printf("WARNING: hotkey %q already grabbed — remove old DE shortcut", cfg.Hotkey)
+		if newCfg.Hotkey != oldHotkey {
+			a.rebindHotkey(newCfg.Hotkey)
 		}
-		defer hkm.Stop()
+
+		log.Println("settings saved and applied")
 	}
 
 	a.tray.Run(cfg, a.toggleDictation, func() {
@@ -80,7 +99,37 @@ func main() {
 		if cancel != nil {
 			cancel()
 		}
-	}, hotkeyErr)
+		a.hkmMu.Lock()
+		if a.hkm != nil {
+			a.hkm.Stop()
+		}
+		a.hkmMu.Unlock()
+	}, startupErr)
+}
+
+// rebindHotkey stops the current hotkey listener and registers a new one.
+func (a *app) rebindHotkey(newHotkey string) {
+	a.hkmMu.Lock()
+	defer a.hkmMu.Unlock()
+
+	if a.hkm != nil {
+		a.hkm.Stop()
+		a.hkm = nil
+	}
+
+	hkm, err := hotkey.New(newHotkey)
+	if err != nil {
+		log.Printf("hotkey: failed to create %q: %v", newHotkey, err)
+		a.tray.SetError("Hotkey invalid: " + newHotkey)
+		return
+	}
+	if err := hkm.Register(a.toggleDictation); err != nil {
+		log.Printf("hotkey: failed to grab %q: %v", newHotkey, err)
+		a.tray.SetError("Hotkey taken: " + newHotkey)
+		return
+	}
+	a.hkm = hkm
+	log.Printf("hotkey: rebound to %q", newHotkey)
 }
 
 // buildRecognizer constructs a Recognizer from the current config.
@@ -138,7 +187,6 @@ func (a *app) startDictation() {
 		return
 	}
 
-	// Wire the recognizer's processing callback to switch the popup state.
 	a.cfgMu.RLock()
 	rec := a.recognizer
 	typer := a.typer

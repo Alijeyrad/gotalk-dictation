@@ -3,6 +3,7 @@ package ui
 import (
 	_ "embed"
 	"log"
+	"sync"
 	"time"
 
 	"fyne.io/fyne/v2"
@@ -21,6 +22,9 @@ type Tray struct {
 	popup    *X11Popup
 	dictItem *fyne.MenuItem
 
+	cfgMu sync.RWMutex
+	cfg   *config.Config // always points to the latest saved config
+
 	// OnSettingsSave is called when the user saves settings from the settings window.
 	OnSettingsSave func(*config.Config)
 }
@@ -28,6 +32,10 @@ type Tray struct {
 // Run initializes the system tray and X11 popup, then runs the Fyne event loop.
 // Blocks until the app quits. Must be called on the main goroutine.
 func (t *Tray) Run(cfg *config.Config, onDictate func(), onQuit func(), startupErr error) {
+	t.cfgMu.Lock()
+	t.cfg = cfg
+	t.cfgMu.Unlock()
+
 	popup, err := newX11Popup()
 	if err != nil {
 		log.Printf("warning: X11 popup unavailable (%v); animations disabled", err)
@@ -40,9 +48,15 @@ func (t *Tray) Run(cfg *config.Config, onDictate func(), onQuit func(), startupE
 	t.dictItem = fyne.NewMenuItem("Start Dictation (Alt+D)", onDictate)
 
 	settingsItem := fyne.NewMenuItem("Settings…", func() {
-		if t.OnSettingsSave != nil {
-			OpenSettings(a, cfg, t.OnSettingsSave)
+		if t.OnSettingsSave == nil {
+			return
 		}
+		t.cfgMu.RLock()
+		current := t.cfg
+		t.cfgMu.RUnlock()
+		log.Printf("opening settings: hotkey=%q language=%q timeout=%d silenceChunks=%d sensitivity=%.1f",
+			current.Hotkey, current.Language, current.Timeout, current.SilenceChunks, current.Sensitivity)
+		showSettingsWindow(t.fyneApp, current, t.OnSettingsSave)
 	})
 
 	menu := fyne.NewMenu("GoTalk",
@@ -72,13 +86,12 @@ func (t *Tray) Run(cfg *config.Config, onDictate func(), onQuit func(), startupE
 	a.Run()
 }
 
-// UpdateConfig refreshes the settings pointer used by the settings window.
-// Call this after a settings save so re-opening settings shows the latest values.
+// UpdateConfig stores the latest config so the settings window always opens
+// with current values. Must be called after every settings save.
 func (t *Tray) UpdateConfig(cfg *config.Config) {
-	// Settings window reads cfg at open time, so just replace the menu item closure.
-	// The tray already holds the pointer if Run was called with it, but since cfg
-	// may be a new allocation, we close over it in the new Run setup via main.go.
-	_ = cfg // main.go owns the canonical cfg pointer; this is a no-op reminder.
+	t.cfgMu.Lock()
+	t.cfg = cfg
+	t.cfgMu.Unlock()
 }
 
 // ---- State methods ---------------------------------------------------------
