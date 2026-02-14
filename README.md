@@ -8,10 +8,13 @@ A fast, native Linux speech-to-text app. Press a hotkey anywhere, speak, and the
 
 - **System-wide dictation** — works in any application
 - **Global hotkey** — default `Alt+D`, fully rebindable live from Settings
-- **Visual indicator** — small X11 overlay shows listening / processing / done / error states
+- **Push-to-talk mode** — hold the hotkey to record, release to submit; or use toggle mode (press once to start, again to cancel)
+- **Undo last dictation** — dedicated undo hotkey (default `Alt+Z`) backspaces exactly what was typed
+- **Visual indicator** — X11 overlay shows state and a preview of the transcribed text
 - **Voice Activity Detection** — auto-stops after silence; configurable sensitivity and silence duration
+- **Fast typing** — short text typed directly via xdotool; longer text pasted via clipboard for near-instant insertion
 - **Punctuation commands** — say "period", "comma", "question mark", etc.
-- **Multi-language** — English (US), Spanish, French, German, Persian (Farsi); easily extended
+- **25 languages** — including regional variants; see full list in Settings
 - **No ffmpeg** — pure Go FLAC encoder, no external audio tools needed
 - **Two API modes** — free public Google API (no account needed) or Google Cloud Speech API
 
@@ -31,7 +34,7 @@ sudo pacman -S alsa-utils xdotool xclip
 ```
 
 `arecord` (from `alsa-utils`) captures the microphone.
-`xdotool` types short transcripts directly; `xclip` is used for paste-based insertion of longer text (faster for long dictations).
+`xdotool` types short transcripts; `xclip` pastes longer ones (≥50 chars) for near-instant insertion.
 
 ### Build dependencies
 
@@ -53,41 +56,41 @@ sudo pacman -S gcc libx11 libxcursor libxrandr libxinerama libxi mesa
 ```bash
 git clone https://github.com/Alijeyrad/gotalk-dictation.git
 cd gotalk-dictation
-go build -ldflags="-s -w" -o gotalk-dictation
-sudo install -m 755 gotalk-dictation /usr/local/bin/
+make install     # builds and installs to /usr/local/bin + system .desktop file
+make autostart   # optional: start at login
 ```
 
-Or use the provided install script:
+Or build manually:
 
 ```bash
-./install.sh
+make build       # output: build/gotalk-dictation
 ```
 
 ## Usage
 
 1. Run `gotalk-dictation` — it appears in the system tray.
-2. Press **Alt+D** (or your configured hotkey).
+2. Press **Alt+D** (or your configured hotkey) to start listening.
 3. Speak. The floating indicator shows the current state.
-4. Text is typed at the cursor when you stop speaking.
+4. Text is typed at the cursor when you stop speaking (or when you release the key in push-to-talk mode).
 
-Press the hotkey again while listening to cancel.
+Press the hotkey again while listening to cancel. Press **Alt+Z** to undo the last dictation.
 
 ### Punctuation commands
 
 | Say               | Gets typed |
 | ----------------- | ---------- |
-| period            | `.`      |
-| comma             | `,`      |
-| question mark     | `?`      |
-| exclamation mark  | `!`      |
-| colon             | `:`      |
-| semicolon         | `;`      |
-| new line          | `↵`     |
-| new paragraph     | `↵↵`   |
-| open parenthesis  | `(`      |
-| close parenthesis | `)`      |
-| dash / hyphen     | `-`      |
-| ellipsis          | `...`    |
+| period            | `.`        |
+| comma             | `,`        |
+| question mark     | `?`        |
+| exclamation mark  | `!`        |
+| colon             | `:`        |
+| semicolon         | `;`        |
+| new line          | `↵`        |
+| new paragraph     | `↵↵`       |
+| open parenthesis  | `(`        |
+| close parenthesis | `)`        |
+| dash / hyphen     | `-`        |
+| ellipsis          | `...`      |
 
 ## Settings
 
@@ -95,14 +98,16 @@ Open **Settings** from the tray icon. All changes apply immediately — no resta
 
 | Setting                     | Description                                               |
 | --------------------------- | --------------------------------------------------------- |
-| Language                    | Speech recognition language                               |
+| Language                    | Speech recognition language (25 languages + variants)    |
 | Custom API key              | Override the built-in Chromium key for the free API       |
 | Use Google Cloud Speech API | Switch to the Cloud API (requires credentials)            |
 | Silence end                 | How long a pause ends the phrase (~62 ms per chunk)       |
-| Sensitivity                 | RMS threshold multiplier — lower picks up quieter voices |
-| Hotkey                      | Click the button and press any modifier+key combination   |
+| Sensitivity                 | RMS threshold multiplier — lower picks up quieter voices  |
+| Hotkey                      | Click and press any modifier+key combination              |
+| Undo hotkey                 | Hotkey to backspace the last dictated text                |
 | Max duration                | Hard timeout for a single dictation session               |
 | Add punctuation             | Enable spoken punctuation commands                        |
+| Push-to-talk                | Hold key to record, release to submit                     |
 
 ### Google Cloud Speech API (optional)
 
@@ -110,10 +115,10 @@ For higher accuracy, enable the Cloud API and set credentials:
 
 ```bash
 export GOOGLE_APPLICATION_CREDENTIALS="/path/to/service-account-key.json"
-# or run: gcloud auth application-default login
+# or: gcloud auth application-default login
 ```
 
-Without credentials the free public endpoint is used — no account needed.
+Without credentials, the free public endpoint is used — no account needed.
 
 ## Configuration file
 
@@ -122,13 +127,15 @@ Without credentials the free public endpoint is used — no account needed.
 ```json
 {
   "hotkey": "Alt-d",
+  "undo_hotkey": "Alt-z",
   "language": "en-US",
   "timeout": 60,
   "silence_chunks": 12,
   "sensitivity": 2.5,
   "api_key": "",
   "use_advanced_api": false,
-  "enable_punctuation": true
+  "enable_punctuation": true,
+  "push_to_talk": false
 }
 ```
 
@@ -140,16 +147,21 @@ gotalk-dictation/
 └── internal/
     ├── audio/recorder.go      — mic capture via arecord
     ├── config/config.go       — load/save ~/.config/gotalk-dictation/config.json
-    ├── hotkey/manager.go      — global X11 key grab
+    ├── hotkey/manager.go      — global X11 key grab (toggle + push-to-talk)
     ├── speech/
     │   ├── recognizer.go      — VAD + free/cloud API
     │   └── flac.go            — pure Go FLAC encoder
-    ├── typing/typer.go        — xdotool text insertion + punctuation
+    ├── typing/typer.go        — xdotool/clipboard text insertion, punctuation, undo
     └── ui/
         ├── tray.go            — Fyne system tray + menu
         ├── settings.go        — settings window
-        └── popup.go           — X11 animated overlay
+        └── popup.go           — X11 animated overlay with transcript preview
 ```
+
+## Roadmap
+
+- **Segmented dictation** — send audio to the API on natural pauses so text appears clause-by-clause while speaking (works with free API)
+- **Streaming dictation** — real-time interim results typed as you speak, corrected on final result (Google Cloud Speech API only)
 
 ## License
 
