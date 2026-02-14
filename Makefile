@@ -12,7 +12,7 @@ BLUE   := \033[34m
 RED    := \033[31m
 
 # --- .PHONY ---
-.PHONY: build run clean install uninstall autostart deps tidy fmt vet lint help
+.PHONY: build run clean install uninstall autostart deps tidy fmt vet lint help test test-x11 test-integration test-all
 
 # --- Application --------------------------------------------
 
@@ -75,6 +75,23 @@ deps: ## Install system build and runtime dependencies
 		exit 1; \
 	fi
 	@printf "$(GREEN)Dependencies installed!$(RESET)\n"
+
+test: ## Run unit tests (no external deps)
+	@printf "$(BLUE)Running unit tests...$(RESET)\n"
+	@go test -v -count=1 -race ./...
+	@printf "$(GREEN)Done!$(RESET)\n"
+
+test-x11: ## Run X11 integration tests (needs DISPLAY, xdotool, xclip, arecord)
+	@printf "$(BLUE)Running X11 integration tests...$(RESET)\n"
+	@go test -v -count=1 -tags x11test ./internal/typing/... ./internal/audio/...
+	@printf "$(GREEN)Done!$(RESET)\n"
+
+test-integration: ## Run distro container tests (requires Docker)
+	@printf "$(BLUE)Running distro container tests...$(RESET)\n"
+	@go test -v -count=1 -tags integration -timeout 45m ./tests/integration/...
+	@printf "$(GREEN)Done!$(RESET)\n"
+
+test-all: test test-integration ## Run unit + distro container tests
 
 tidy: ## Tidy and verify Go modules
 	@printf "$(BLUE)Tidying modules...$(RESET)\n"

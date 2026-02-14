@@ -103,5 +103,17 @@ func processPunctuation(text string) string {
 		}
 		i++
 	}
-	return strings.Join(result, " ")
+	// Join tokens with a space, but skip spaces adjacent to whitespace-only tokens
+	// (e.g. "new line" → "\n" must not get surrounding spaces).
+	var out strings.Builder
+	for i, token := range result {
+		if i > 0 {
+			prev := result[i-1]
+			if strings.TrimSpace(prev) != "" && strings.TrimSpace(token) != "" {
+				out.WriteByte(' ')
+			}
+		}
+		out.WriteString(token)
+	}
+	return out.String()
 }
