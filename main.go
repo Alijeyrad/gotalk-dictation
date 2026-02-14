@@ -15,6 +15,7 @@ import (
 )
 
 type app struct {
+	cfgMu      sync.RWMutex
 	cfg        *config.Config
 	recorder   *audio.Recorder
 	recognizer *speech.Recognizer
@@ -33,22 +34,32 @@ func main() {
 		cfg = config.Default()
 	}
 
-	if speech.HasCloudCredentials() {
-		log.Println("speech: using Google Cloud Speech API (credentials found)")
+	if speech.HasCloudCredentials() || cfg.UseAdvancedAPI {
+		log.Println("speech: using Google Cloud Speech API")
 	} else {
 		log.Println("speech: using free Google Speech API (no credentials needed)")
 	}
 
 	a := &app{
-		cfg:        cfg,
-		recorder:   &audio.Recorder{},
-		recognizer: &speech.Recognizer{Language: cfg.Language},
-		typer:      &typing.Typer{EnablePunctuation: cfg.EnablePunctuation},
-		tray:       &ui.Tray{},
+		cfg:      cfg,
+		recorder: &audio.Recorder{},
+		typer:    &typing.Typer{EnablePunctuation: cfg.EnablePunctuation},
+		tray:     &ui.Tray{},
+	}
+	a.recognizer = buildRecognizer(cfg)
+
+	a.tray.OnSettingsSave = func(newCfg *config.Config) {
+		if err := newCfg.Save(); err != nil {
+			log.Printf("warning: failed to save config: %v", err)
+		}
+		a.cfgMu.Lock()
+		a.cfg = newCfg
+		a.recognizer = buildRecognizer(newCfg)
+		a.typer = &typing.Typer{EnablePunctuation: newCfg.EnablePunctuation}
+		a.cfgMu.Unlock()
+		log.Println("settings saved and applied")
 	}
 
-	// Register global hotkey (non-fatal). Done before tray.Run so we know the
-	// status; the tray will surface any error once it's initialized.
 	var hotkeyErr error
 	hkm, err := hotkey.New(cfg.Hotkey)
 	if err != nil {
@@ -57,16 +68,12 @@ func main() {
 	} else {
 		if err := hkm.Register(a.toggleDictation); err != nil {
 			hotkeyErr = err
-			log.Printf("WARNING: hotkey %q is already grabbed by another app.\n"+
-				"  → Open your DE keyboard settings, find the Alt+D shortcut\n"+
-				"    (probably your old dictation script), remove it, then restart.", cfg.Hotkey)
+			log.Printf("WARNING: hotkey %q already grabbed — remove old DE shortcut", cfg.Hotkey)
 		}
 		defer hkm.Stop()
 	}
 
-	// Run system tray + popup — blocks until quit (must be on main goroutine).
-	// Pass the hotkey error so the tray can surface it after initializing.
-	a.tray.Run(a.toggleDictation, func() {
+	a.tray.Run(cfg, a.toggleDictation, func() {
 		a.mu.Lock()
 		cancel := a.cancelDicta
 		a.mu.Unlock()
@@ -74,6 +81,17 @@ func main() {
 			cancel()
 		}
 	}, hotkeyErr)
+}
+
+// buildRecognizer constructs a Recognizer from the current config.
+func buildRecognizer(cfg *config.Config) *speech.Recognizer {
+	return &speech.Recognizer{
+		Language:       cfg.Language,
+		APIKey:         cfg.APIKey,
+		UseAdvancedAPI: cfg.UseAdvancedAPI,
+		SilenceChunks:  cfg.SilenceChunks,
+		Sensitivity:    cfg.Sensitivity,
+	}
 }
 
 func (a *app) toggleDictation() {
@@ -95,7 +113,10 @@ func (a *app) startDictation() {
 		return
 	}
 	a.isListening = true
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(a.cfg.Timeout)*time.Second)
+	a.cfgMu.RLock()
+	timeout := a.cfg.Timeout
+	a.cfgMu.RUnlock()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Second)
 	a.cancelDicta = cancel
 	a.mu.Unlock()
 
@@ -107,6 +128,7 @@ func (a *app) startDictation() {
 		a.mu.Unlock()
 	}()
 
+	// Show "Listening" immediately so the user sees feedback before VAD runs.
 	a.tray.SetListening()
 
 	audioCh, err := a.recorder.Start(ctx)
@@ -116,16 +138,26 @@ func (a *app) startDictation() {
 		return
 	}
 
-	a.tray.SetProcessing()
-	text, err := a.recognizer.Recognize(ctx, audioCh)
+	// Wire the recognizer's processing callback to switch the popup state.
+	a.cfgMu.RLock()
+	rec := a.recognizer
+	typer := a.typer
+	a.cfgMu.RUnlock()
+
+	rec.OnProcessing = func() {
+		a.tray.SetProcessing()
+	}
+
+	text, err := rec.Recognize(ctx, audioCh)
 	a.recorder.Stop()
 
 	if err != nil {
-		if ctx.Err() == context.DeadlineExceeded {
-			a.tray.SetError("Timeout — no speech detected")
-		} else if ctx.Err() == context.Canceled {
+		switch ctx.Err() {
+		case context.DeadlineExceeded:
+			a.tray.SetError("Timeout")
+		case context.Canceled:
 			a.tray.SetIdle()
-		} else {
+		default:
 			a.tray.SetError(err.Error())
 			log.Printf("recognizer error: %v", err)
 		}
@@ -137,7 +169,7 @@ func (a *app) startDictation() {
 		return
 	}
 
-	if err := a.typer.Type(text); err != nil {
+	if err := typer.Type(text); err != nil {
 		a.tray.SetError("Type error: " + err.Error())
 		log.Printf("typer error: %v", err)
 		return

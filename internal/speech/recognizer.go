@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 
 	speechapi "cloud.google.com/go/speech/apiv1"
@@ -26,27 +25,59 @@ const (
 	sampleRate      = 16000
 )
 
-// Recognizer performs speech-to-text using either the unofficial free Google API
-// (default) or the official Google Cloud Speech API (when credentials are present).
+// Recognizer performs speech-to-text using either the unofficial free Google
+// API (default) or the official Google Cloud Speech API.
 type Recognizer struct {
 	Language string
+
+	// APIKey overrides the built-in Chromium key for the free API.
+	APIKey string
+
+	// UseAdvancedAPI forces use of the Google Cloud Speech API.
+	UseAdvancedAPI bool
+
+	// SilenceChunks is the number of consecutive silent chunks that end a phrase.
+	// Each chunk is ~62 ms. Default 12 (~0.75 s).
+	SilenceChunks int
+
+	// Sensitivity is the RMS threshold multiplier (lower = more sensitive).
+	Sensitivity float64
+
+	// OnProcessing is called when VAD ends and the API call is about to begin.
+	// Use it to switch the UI from "Listening" to "Processing".
+	OnProcessing func()
 }
 
-// Recognize transcribes audio from audioCh and returns the text.
-// It automatically selects the free or cloud API based on credential availability.
+func (r *Recognizer) silenceChunks() int {
+	if r.SilenceChunks > 0 {
+		return r.SilenceChunks
+	}
+	return 12
+}
+
+func (r *Recognizer) sensitivity() float64 {
+	if r.Sensitivity > 0 {
+		return r.Sensitivity
+	}
+	return 2.5
+}
+
+// Recognize transcribes audio from audioCh and returns the transcript.
 func (r *Recognizer) Recognize(ctx context.Context, audioCh <-chan []byte) (string, error) {
-	if HasCloudCredentials() {
+	if r.UseAdvancedAPI || HasCloudCredentials() {
+		if r.OnProcessing != nil {
+			r.OnProcessing()
+		}
 		return r.recognizeCloud(ctx, audioCh)
 	}
 	return r.recognizeFree(ctx, audioCh)
 }
 
-// HasCloudCredentials reports whether Google Cloud credentials are available.
+// HasCloudCredentials reports whether Google Cloud credentials are configured.
 func HasCloudCredentials() bool {
 	if _, ok := os.LookupEnv("GOOGLE_APPLICATION_CREDENTIALS"); ok {
 		return true
 	}
-	// Application Default Credentials from gcloud CLI
 	home, _ := os.UserHomeDir()
 	adc := filepath.Join(home, ".config", "gcloud", "application_default_credentials.json")
 	_, err := os.Stat(adc)
@@ -55,62 +86,53 @@ func HasCloudCredentials() bool {
 
 // ---- Free (unofficial) API -----------------------------------------------
 
-// recognizeFree buffers audio using VAD, then sends it to the unofficial API.
 func (r *Recognizer) recognizeFree(ctx context.Context, audioCh <-chan []byte) (string, error) {
-	pcm, err := bufferWithVAD(ctx, audioCh)
+	// VAD phase — UI stays in "Listening" state.
+	pcm, err := r.bufferWithVAD(ctx, audioCh)
+
+	// Switch UI to "Processing" now that we have audio to send.
+	if r.OnProcessing != nil {
+		r.OnProcessing()
+	}
+
 	if len(pcm) == 0 {
-		return "", err // timeout/cancel or no speech
+		return "", err
 	}
-	flac, ferr := pcmToFLAC(pcm)
-	if ferr != nil {
-		return "", fmt.Errorf("encoding audio: %w", ferr)
-	}
-	return postFreeAPI(ctx, flac, r.Language)
+
+	// Encode PCM → FLAC using our native encoder (no ffmpeg required).
+	flacData := pcmToFLACNative(pcm)
+	return r.postFreeAPI(ctx, flacData)
 }
 
-// pcmToFLAC converts raw 16-bit mono 16kHz PCM to FLAC using ffmpeg.
-func pcmToFLAC(pcm []byte) ([]byte, error) {
-	cmd := exec.Command("ffmpeg",
-		"-hide_banner", "-loglevel", "error",
-		"-f", "s16le", "-ar", "16000", "-ac", "1",
-		"-i", "pipe:0",
-		"-f", "flac",
-		"pipe:1",
-	)
-	cmd.Stdin = bytes.NewReader(pcm)
-	out, err := cmd.Output()
-	if err != nil {
-		return nil, fmt.Errorf("ffmpeg: %w", err)
-	}
-	return out, nil
-}
-
-// bufferWithVAD collects PCM audio, performing energy-based voice activity detection.
-// Returns audio from speech start through end-of-phrase silence.
-func bufferWithVAD(ctx context.Context, audioCh <-chan []byte) ([]byte, error) {
+// bufferWithVAD collects PCM audio with energy-based Voice Activity Detection.
+// It calibrates against ambient noise, then captures from first speech onset
+// through the end-of-phrase silence.
+func (r *Recognizer) bufferWithVAD(ctx context.Context, audioCh <-chan []byte) ([]byte, error) {
 	const (
-		calibChunks        = 8  // ~0.5 s of ambient calibration
-		speechThresholdMul = 2.5
-		minSpeechChunks    = 2  // debounce: N consecutive loud chunks = speech
-		silenceEndChunks   = 8  // ~1 s of quiet after speech ends phrase
+		calibChunks     = 8 // ~0.5 s ambient calibration
+		minSpeechChunks = 2 // consecutive loud chunks to start capturing
+		preRollLen      = 4 // chunks kept before speech onset (prevent clipping)
 	)
 
-	type state int
+	silenceEndChunks := r.silenceChunks()
+	thresholdMul := r.sensitivity()
+
+	type phase int
 	const (
-		calibrating state = iota
+		calibrating phase = iota
 		waitingSpeech
 		inSpeech
 	)
 
 	var (
-		cur            state
-		calibCount     int
-		calibRMSSum    float64
-		threshold      float64
-		speechCount    int
-		silenceCount   int
-		preSpeech      [][]byte // small ring buffer kept before speech starts
-		result         []byte
+		cur         phase
+		calibCount  int
+		calibSum    float64
+		threshold   float64
+		speechCount int
+		silCount    int
+		preRoll     [][]byte
+		result      []byte
 	)
 
 	for {
@@ -128,10 +150,10 @@ func bufferWithVAD(ctx context.Context, audioCh <-chan []byte) ([]byte, error) {
 			switch cur {
 			case calibrating:
 				calibCount++
-				calibRMSSum += rms
+				calibSum += rms
 				if calibCount >= calibChunks {
-					ambient := calibRMSSum / float64(calibCount)
-					threshold = ambient * speechThresholdMul
+					ambient := calibSum / float64(calibCount)
+					threshold = ambient * thresholdMul
 					if threshold < 150 {
 						threshold = 150
 					}
@@ -139,19 +161,18 @@ func bufferWithVAD(ctx context.Context, audioCh <-chan []byte) ([]byte, error) {
 				}
 
 			case waitingSpeech:
-				// Maintain a short pre-roll buffer so we don't clip the start of speech.
-				preSpeech = append(preSpeech, chunk)
-				if len(preSpeech) > 4 {
-					preSpeech = preSpeech[1:]
+				preRoll = append(preRoll, chunk)
+				if len(preRoll) > preRollLen {
+					preRoll = preRoll[1:]
 				}
 				if rms > threshold {
 					speechCount++
 					if speechCount >= minSpeechChunks {
 						cur = inSpeech
-						for _, c := range preSpeech {
+						for _, c := range preRoll {
 							result = append(result, c...)
 						}
-						preSpeech = nil
+						preRoll = nil
 						speechCount = 0
 					}
 				} else {
@@ -161,19 +182,19 @@ func bufferWithVAD(ctx context.Context, audioCh <-chan []byte) ([]byte, error) {
 			case inSpeech:
 				result = append(result, chunk...)
 				if rms <= threshold {
-					silenceCount++
-					if silenceCount >= silenceEndChunks {
+					silCount++
+					if silCount >= silenceEndChunks {
 						return result, nil
 					}
 				} else {
-					silenceCount = 0
+					silCount = 0
 				}
 			}
 		}
 	}
 }
 
-// calcRMS computes Root Mean Square energy of 16-bit little-endian PCM samples.
+// calcRMS computes Root Mean Square energy of 16-bit little-endian PCM.
 func calcRMS(pcm []byte) float64 {
 	n := len(pcm) / 2
 	if n == 0 {
@@ -187,31 +208,6 @@ func calcRMS(pcm []byte) float64 {
 	return math.Sqrt(sum / float64(n))
 }
 
-// makeWAV wraps raw 16-bit mono 16kHz PCM in a WAV container.
-func makeWAV(pcm []byte) []byte {
-	var buf bytes.Buffer
-	size := uint32(len(pcm))
-
-	buf.WriteString("RIFF")
-	binary.Write(&buf, binary.LittleEndian, size+36) //nolint:errcheck
-	buf.WriteString("WAVE")
-
-	buf.WriteString("fmt ")
-	binary.Write(&buf, binary.LittleEndian, uint32(16))          //nolint:errcheck // chunk size
-	binary.Write(&buf, binary.LittleEndian, uint16(1))           //nolint:errcheck // PCM
-	binary.Write(&buf, binary.LittleEndian, uint16(1))           //nolint:errcheck // mono
-	binary.Write(&buf, binary.LittleEndian, uint32(sampleRate))  //nolint:errcheck
-	binary.Write(&buf, binary.LittleEndian, uint32(sampleRate*2)) //nolint:errcheck // byte rate
-	binary.Write(&buf, binary.LittleEndian, uint16(2))           //nolint:errcheck // block align
-	binary.Write(&buf, binary.LittleEndian, uint16(16))          //nolint:errcheck // bits per sample
-
-	buf.WriteString("data")
-	binary.Write(&buf, binary.LittleEndian, size) //nolint:errcheck
-	buf.Write(pcm)
-
-	return buf.Bytes()
-}
-
 type freeAPIResponse struct {
 	Result []struct {
 		Alternative []struct {
@@ -222,9 +218,11 @@ type freeAPIResponse struct {
 	} `json:"result"`
 }
 
-// postFreeAPI sends FLAC audio to the unofficial Google Speech API and returns the transcript.
-func postFreeAPI(ctx context.Context, wavData []byte, language string) (string, error) {
-	key := os.Getenv("GOOGLE_API_KEY")
+func (r *Recognizer) postFreeAPI(ctx context.Context, flacData []byte) (string, error) {
+	key := r.APIKey
+	if key == "" {
+		key = os.Getenv("GOOGLE_API_KEY")
+	}
 	if key == "" {
 		key = defaultFreeKey
 	}
@@ -232,11 +230,11 @@ func postFreeAPI(ctx context.Context, wavData []byte, language string) (string, 
 	u, _ := url.Parse(freeAPIEndpoint)
 	q := u.Query()
 	q.Set("client", "chromium")
-	q.Set("lang", language)
+	q.Set("lang", r.Language)
 	q.Set("key", key)
 	u.RawQuery = q.Encode()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), bytes.NewReader(wavData))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), bytes.NewReader(flacData))
 	if err != nil {
 		return "", fmt.Errorf("building request: %w", err)
 	}
@@ -252,7 +250,6 @@ func postFreeAPI(ctx context.Context, wavData []byte, language string) (string, 
 		return "", fmt.Errorf("API returned HTTP %d", resp.StatusCode)
 	}
 
-	// Response is newline-delimited JSON; find the line with actual results.
 	var transcript string
 	scanner := bufio.NewScanner(resp.Body)
 	for scanner.Scan() {
@@ -260,24 +257,43 @@ func postFreeAPI(ctx context.Context, wavData []byte, language string) (string, 
 		if len(line) == 0 {
 			continue
 		}
-		var r freeAPIResponse
-		if err := json.Unmarshal(line, &r); err != nil {
+		var res freeAPIResponse
+		if err := json.Unmarshal(line, &res); err != nil {
 			continue
 		}
-		for _, result := range r.Result {
+		for _, result := range res.Result {
 			if len(result.Alternative) > 0 {
 				transcript = result.Alternative[0].Transcript
 			}
 		}
 	}
-
 	return transcript, nil
+}
+
+// makeWAV wraps raw 16-bit mono 16kHz PCM in a WAV container.
+// Used by the Cloud API path which accepts LINEAR16.
+func makeWAV(pcm []byte) []byte {
+	var buf bytes.Buffer
+	size := uint32(len(pcm))
+	buf.WriteString("RIFF")
+	binary.Write(&buf, binary.LittleEndian, size+36)  //nolint:errcheck
+	buf.WriteString("WAVE")
+	buf.WriteString("fmt ")
+	binary.Write(&buf, binary.LittleEndian, uint32(16))         //nolint:errcheck
+	binary.Write(&buf, binary.LittleEndian, uint16(1))          //nolint:errcheck // PCM
+	binary.Write(&buf, binary.LittleEndian, uint16(1))          //nolint:errcheck // mono
+	binary.Write(&buf, binary.LittleEndian, uint32(sampleRate)) //nolint:errcheck
+	binary.Write(&buf, binary.LittleEndian, uint32(sampleRate*2)) //nolint:errcheck
+	binary.Write(&buf, binary.LittleEndian, uint16(2))          //nolint:errcheck
+	binary.Write(&buf, binary.LittleEndian, uint16(16))         //nolint:errcheck
+	buf.WriteString("data")
+	binary.Write(&buf, binary.LittleEndian, size) //nolint:errcheck
+	buf.Write(pcm)
+	return buf.Bytes()
 }
 
 // ---- Official Google Cloud Speech API ------------------------------------
 
-// recognizeCloud streams audio to the Google Cloud Speech-to-Text API.
-// Requires credentials (GOOGLE_APPLICATION_CREDENTIALS or gcloud ADC).
 func (r *Recognizer) recognizeCloud(ctx context.Context, audioCh <-chan []byte) (string, error) {
 	client, err := speechapi.NewClient(ctx)
 	if err != nil {
@@ -345,6 +361,5 @@ func (r *Recognizer) recognizeCloud(ctx context.Context, audioCh <-chan []byte) 
 			}
 		}
 	}
-
 	return finalText, nil
 }
