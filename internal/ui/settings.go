@@ -87,10 +87,16 @@ func showSettingsWindow(fyneApp fyne.App, cfg *config.Config, onSave func(*confi
 
 	hotkeyBtn := widget.NewButton(cfg.Hotkey, nil)
 
+	// heldMods tracks which modifiers are currently pressed manually,
+	// because CurrentKeyModifiers() is unreliable on KDE Wayland.
+	var heldMods fyne.KeyModifier
+
 	stopCapture := func() {
 		capturing = false
+		heldMods = 0
 		if dc, ok := w.Canvas().(desktop.Canvas); ok {
 			dc.SetOnKeyDown(nil)
+			dc.SetOnKeyUp(nil)
 		}
 	}
 
@@ -102,59 +108,92 @@ func showSettingsWindow(fyneApp fyne.App, cfg *config.Config, onSave func(*confi
 			return
 		}
 
-		capturing = true
-		hotkeyBtn.SetText("Press key combination…")
-
 		dc, ok := w.Canvas().(desktop.Canvas)
 		if !ok {
-			// Fallback: can't capture on this platform.
-			capturing = false
-			hotkeyBtn.SetText(currentHotkey)
 			return
 		}
+
+		capturing = true
+		heldMods = 0
+		hotkeyBtn.SetText("Press key combination…")
+
+		dc.SetOnKeyUp(func(ev *fyne.KeyEvent) {
+			n := strings.ToLower(string(ev.Name))
+			switch {
+			case strings.Contains(n, "control"):
+				heldMods &^= fyne.KeyModifierControl
+			case strings.Contains(n, "alt"):
+				heldMods &^= fyne.KeyModifierAlt
+			case strings.Contains(n, "shift"):
+				heldMods &^= fyne.KeyModifierShift
+			case strings.Contains(n, "super") || strings.Contains(n, "meta"):
+				heldMods &^= fyne.KeyModifierSuper
+			}
+		})
 
 		dc.SetOnKeyDown(func(ev *fyne.KeyEvent) {
 			if !capturing {
 				return
 			}
 
-			// Read modifiers held at key-down time.
-			var mods fyne.KeyModifier
-			if drv, ok := fyne.CurrentApp().Driver().(desktop.Driver); ok {
-				mods = drv.CurrentKeyModifiers()
+			n := strings.ToLower(string(ev.Name))
+
+			// Track modifier key presses; don't treat them as the captured key.
+			switch {
+			case strings.Contains(n, "control"):
+				heldMods |= fyne.KeyModifierControl
+				return
+			case strings.Contains(n, "alt"):
+				heldMods |= fyne.KeyModifierAlt
+				return
+			case strings.Contains(n, "shift"):
+				heldMods |= fyne.KeyModifierShift
+				return
+			case strings.Contains(n, "super") || strings.Contains(n, "meta"):
+				heldMods |= fyne.KeyModifierSuper
+				return
+			case strings.Contains(n, "caps"):
+				return
 			}
 
-			// Require at least one modifier (Alt, Ctrl, Super).
-			// Allow Shift only in combination with others.
-			meaningful := mods & (fyne.KeyModifierAlt | fyne.KeyModifierControl | fyne.KeyModifierSuper)
+			// Escape cancels capture without changing the hotkey.
+			if ev.Name == fyne.KeyEscape {
+				stopCapture()
+				hotkeyBtn.SetText(currentHotkey)
+				return
+			}
+
+			// Require at least one of Alt/Ctrl/Super (Shift alone not enough).
+			meaningful := heldMods & (fyne.KeyModifierAlt | fyne.KeyModifierControl | fyne.KeyModifierSuper)
 			if meaningful == 0 {
 				return
 			}
 
-			// Build "Mod-Mod-key" string.
+			// Build "Ctrl-Alt-Shift-Super-key" string.
 			var parts []string
-			if mods&fyne.KeyModifierControl != 0 {
+			if heldMods&fyne.KeyModifierControl != 0 {
 				parts = append(parts, "Ctrl")
 			}
-			if mods&fyne.KeyModifierAlt != 0 {
+			if heldMods&fyne.KeyModifierAlt != 0 {
 				parts = append(parts, "Alt")
 			}
-			if mods&fyne.KeyModifierShift != 0 {
+			if heldMods&fyne.KeyModifierShift != 0 {
 				parts = append(parts, "Shift")
 			}
-			if mods&fyne.KeyModifierSuper != 0 {
+			if heldMods&fyne.KeyModifierSuper != 0 {
 				parts = append(parts, "Super")
 			}
-			parts = append(parts, strings.ToLower(string(ev.Name)))
+			// Key name: use lowercase single char or named key as-is.
+			parts = append(parts, n)
 			hotkey := strings.Join(parts, "-")
 
 			stopCapture()
 			currentHotkey = hotkey
 			hotkeyBtn.SetText(hotkey)
-			// trigger change detection
 			updateSaveBtn()
 		})
 	}
+
 
 	// ---- General ----
 	timeoutEntry := widget.NewEntry()
