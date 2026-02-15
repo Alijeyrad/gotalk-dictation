@@ -56,6 +56,10 @@ const testScript = `set -e
 cp -r /src/. /workspace/
 cd /workspace
 cp tests/integration/testdata/alsa_null.conf ~/.asoundrc
+# Align go directive with the installed toolchain so GOTOOLCHAIN=local works
+# even when go.mod declares a newer minimum version.
+GOINSTALLED=$(go version | awk '{print $3}' | sed 's/go//')
+go mod edit -go="$GOINSTALLED" -toolchain=none
 # Run unit tests (no X11 required).
 go test -v -count=1 ./...
 # Start Xvfb for X11 integration tests.
