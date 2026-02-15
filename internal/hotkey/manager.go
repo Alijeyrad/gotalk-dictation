@@ -3,6 +3,8 @@ package hotkey
 import (
 	"fmt"
 	"strings"
+	"sync/atomic"
+	"time"
 
 	"github.com/jezek/xgb"
 	"github.com/jezek/xgb/xproto"
@@ -65,15 +67,29 @@ func (m *Manager) RegisterPushToTalk(onPress, onRelease func()) error {
 	if err := m.grab(); err != nil {
 		return err
 	}
-	xproto.ChangeWindowAttributes(m.conn, //nolint:errcheck
-		xproto.Setup(m.conn).DefaultScreen(m.conn).Root,
-		xproto.CwEventMask,
-		[]uint32{uint32(xproto.EventMaskKeyPress | xproto.EventMaskKeyRelease)})
+	// NOTE: Do NOT call ChangeWindowAttributes on the root window here.
+	// GrabKey already routes the grabbed key's events to this connection.
+	// Setting EventMaskKeyPress|EventMaskKeyRelease on root would steal ALL
+	// keyboard events from the entire X session.
 	go m.eventLoop(onPress, onRelease)
 	return nil
 }
 
 func (m *Manager) eventLoop(onPress, onRelease func()) {
+	// X11 auto-repeat sends a KeyRelease+KeyPress pair rapidly while a key is
+	// held. We track a pendingRelease flag (atomic so the timer goroutine can
+	// clear it) and a releaseGen counter. On KeyPress we check the flag:
+	//   - flag is still set  → KeyPress arrived within the grace window = auto-repeat,
+	//                          cancel the pending release by incrementing the gen.
+	//   - flag is already clear → timer already fired (real release happened)
+	//                             treat this as a fresh press.
+	const autoRepeatGrace = 50 * time.Millisecond
+	isPTT := onRelease != nil
+
+	var pressed bool
+	var pendingRelease atomic.Bool
+	var releaseGen atomic.Uint64
+
 	for {
 		select {
 		case <-m.stopCh:
@@ -82,21 +98,50 @@ func (m *Manager) eventLoop(onPress, onRelease func()) {
 		}
 
 		ev, err := m.conn.WaitForEvent()
-		if err != nil {
-			return
-		}
-		if ev == nil {
+		if err != nil || ev == nil {
 			return
 		}
 
 		switch ev.(type) {
 		case xproto.KeyPressEvent:
-			if onPress != nil {
-				go onPress()
+			if isPTT {
+				if pendingRelease.Swap(false) {
+					// KeyPress while release timer is still pending = auto-repeat.
+					// Increment gen so the goroutine won't call onRelease.
+					releaseGen.Add(1)
+					pressed = true // still holding
+				} else if !pressed {
+					// Real new press — release timer has already fired (or this is
+					// the very first press).
+					pressed = true
+					if onPress != nil {
+						go onPress()
+					}
+				}
+			} else {
+				// Toggle mode: fire once per physical press, ignore auto-repeat.
+				if !pressed {
+					pressed = true
+					if onPress != nil {
+						go onPress()
+					}
+				}
 			}
 		case xproto.KeyReleaseEvent:
-			if onRelease != nil {
-				go onRelease()
+			pressed = false
+			if isPTT && onRelease != nil {
+				pendingRelease.Store(true)
+				gen := releaseGen.Add(1)
+				rel := onRelease
+				go func() {
+					time.Sleep(autoRepeatGrace)
+					// Clear the flag so the next KeyPress is treated as a fresh press.
+					pendingRelease.Store(false)
+					if releaseGen.Load() == gen {
+						// Gen unchanged: no auto-repeat arrived, this was a real release.
+						rel()
+					}
+				}()
 			}
 		}
 	}

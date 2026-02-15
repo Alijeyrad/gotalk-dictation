@@ -2,7 +2,9 @@ package ui
 
 import (
 	_ "embed"
+	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"fyne.io/fyne/v2"
@@ -16,8 +18,15 @@ import (
 var iconPNG []byte
 
 type Tray struct {
-	fyneApp fyne.App
-	popup   *X11Popup
+	fyneApp     fyne.App
+	popup       *X11Popup
+	settingsWin fyne.Window // non-nil while the settings window is open
+
+	// popupGen is incremented on every state transition that should own the
+	// popup. The auto-hide goroutines in SetDone/SetError capture their
+	// generation at spawn time and only call SetIdle if it hasn't changed,
+	// preventing a stale hide from clearing an active listening/processing state.
+	popupGen atomic.Uint64
 
 	cfgMu sync.RWMutex
 	cfg   *config.Config
@@ -42,10 +51,18 @@ func (t *Tray) Run(cfg *config.Config, onDictate func(), onQuit func(), startupE
 		if t.OnSettingsSave == nil {
 			return
 		}
+		// If the window is already open, just bring it to the front.
+		if t.settingsWin != nil {
+			t.settingsWin.Show()
+			t.settingsWin.RequestFocus()
+			return
+		}
 		t.cfgMu.RLock()
 		current := t.cfg
 		t.cfgMu.RUnlock()
-		showSettingsWindow(t.fyneApp, current, t.OnSettingsSave)
+		win := showSettingsWindow(t.fyneApp, current, t.OnSettingsSave)
+		t.settingsWin = win
+		win.SetOnClosed(func() { t.settingsWin = nil })
 	})
 
 	menu := fyne.NewMenu("GoTalk",
@@ -82,6 +99,7 @@ func (t *Tray) UpdateConfig(cfg *config.Config) {
 }
 
 func (t *Tray) SetListening() {
+	t.popupGen.Add(1) // invalidate any pending auto-hide goroutine
 	if t.popup != nil {
 		t.popup.Show(stListening)
 	}
@@ -94,12 +112,15 @@ func (t *Tray) SetProcessing() {
 }
 
 func (t *Tray) SetDone(text string) {
+	gen := t.popupGen.Add(1)
 	if t.popup != nil {
 		t.popup.ShowDone(text)
 	}
 	go func() {
 		time.Sleep(2 * time.Second)
-		t.SetIdle()
+		if t.popupGen.Load() == gen {
+			t.SetIdle()
+		}
 	}()
 }
 
@@ -109,12 +130,16 @@ func (t *Tray) SetIdle() {
 	}
 }
 
-func (t *Tray) SetError(_ string) {
+func (t *Tray) SetError(msg string) {
+	log.Println("gotalk error:", msg)
+	gen := t.popupGen.Add(1)
 	if t.popup != nil {
 		t.popup.Show(stError)
 	}
 	go func() {
 		time.Sleep(3 * time.Second)
-		t.SetIdle()
+		if t.popupGen.Load() == gen {
+			t.SetIdle()
+		}
 	}()
 }

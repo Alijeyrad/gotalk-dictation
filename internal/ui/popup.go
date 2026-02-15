@@ -39,6 +39,7 @@ type X11Popup struct {
 	gc     xproto.Gcontext
 	state  popState
 	stopCh chan struct{}
+	wg     sync.WaitGroup // tracks renderLoop + eventLoop
 
 	hasFont  bool
 	textFont xproto.Font
@@ -58,6 +59,7 @@ func newX11Popup() (*X11Popup, error) {
 		conn.Close()
 		return nil, err
 	}
+	p.wg.Add(2)
 	go p.eventLoop()
 	go p.renderLoop()
 	return p, nil
@@ -219,14 +221,20 @@ func (p *X11Popup) Close() {
 	default:
 		close(p.stopCh)
 	}
+	// Best-effort cleanup before closing the connection.
 	if p.hasFont {
 		xproto.CloseFont(p.conn, p.textFont) //nolint:errcheck
 	}
 	xproto.DestroyWindow(p.conn, p.wid) //nolint:errcheck
+	// conn.Close() unblocks eventLoop's WaitForEvent so it can exit.
 	p.conn.Close()
+	// Wait for both goroutines to finish before returning, so callers know
+	// all X11 activity has stopped.
+	p.wg.Wait()
 }
 
 func (p *X11Popup) renderLoop() {
+	defer p.wg.Done()
 	ticker := time.NewTicker(50 * time.Millisecond)
 	defer ticker.Stop()
 	frame := 0
@@ -250,6 +258,7 @@ func (p *X11Popup) renderLoop() {
 }
 
 func (p *X11Popup) eventLoop() {
+	defer p.wg.Done()
 	for {
 		ev, err := p.conn.WaitForEvent()
 		if err != nil || ev == nil {

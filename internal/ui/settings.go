@@ -43,11 +43,10 @@ var languages = []struct{ code, label string }{
 	{"uk-UA", "Ukrainian"},
 }
 
-func showSettingsWindow(fyneApp fyne.App, cfg *config.Config, onSave func(*config.Config)) {
+func showSettingsWindow(fyneApp fyne.App, cfg *config.Config, onSave func(*config.Config)) fyne.Window {
 	w := fyneApp.NewWindow("GoTalk Dictation — Settings")
 	w.SetIcon(fyne.NewStaticResource("icon.png", iconPNG))
-	w.Resize(fyne.NewSize(460, 500))
-	w.SetFixedSize(true)
+	w.Resize(fyne.NewSize(480, 520))
 
 	langLabels := make([]string, len(languages))
 	labelToCode := make(map[string]string, len(languages))
@@ -88,6 +87,14 @@ func showSettingsWindow(fyneApp fyne.App, cfg *config.Config, onSave func(*confi
 
 	currentHotkey := cfg.Hotkey
 	currentUndoHotkey := cfg.UndoHotkey
+	currentPTTHotkey := cfg.PTTHotkey
+
+	pttBtnLabel := func(h string) string {
+		if h == "" {
+			return "(not set — click to assign)"
+		}
+		return h
+	}
 
 	// updateSaveBtn is declared before the hotkey buttons so closures can
 	// reference it; the body is assigned further below.
@@ -110,7 +117,7 @@ func showSettingsWindow(fyneApp fyne.App, cfg *config.Config, onSave func(*confi
 
 	// startCapture wires the canvas key handlers to capture one key combination
 	// into *target, then updates btn's label and calls onChange.
-	startCapture := func(btn *widget.Button, target *string, onChange func()) {
+	startCapture := func(btn *widget.Button, target *string, displayFn func(string) string, onChange func()) {
 		dc, ok := w.Canvas().(desktop.Canvas)
 		if !ok {
 			return
@@ -157,7 +164,11 @@ func showSettingsWindow(fyneApp fyne.App, cfg *config.Config, onSave func(*confi
 
 			if ev.Name == fyne.KeyEscape {
 				stopCapture()
-				btn.SetText(*target)
+				if displayFn != nil {
+					btn.SetText(displayFn(*target))
+				} else {
+					btn.SetText(*target)
+				}
 				return
 			}
 
@@ -183,7 +194,11 @@ func showSettingsWindow(fyneApp fyne.App, cfg *config.Config, onSave func(*confi
 
 			stopCapture()
 			*target = strings.Join(parts, "-")
-			btn.SetText(*target)
+			if displayFn != nil {
+				btn.SetText(displayFn(*target))
+			} else {
+				btn.SetText(*target)
+			}
 			onChange()
 		})
 	}
@@ -195,7 +210,7 @@ func showSettingsWindow(fyneApp fyne.App, cfg *config.Config, onSave func(*confi
 			hotkeyBtn.SetText(currentHotkey)
 			return
 		}
-		startCapture(hotkeyBtn, &currentHotkey, func() { updateSaveBtn() })
+		startCapture(hotkeyBtn, &currentHotkey, nil, func() { updateSaveBtn() })
 	}
 
 	undoHotkeyBtn := widget.NewButton(cfg.UndoHotkey, nil)
@@ -205,7 +220,30 @@ func showSettingsWindow(fyneApp fyne.App, cfg *config.Config, onSave func(*confi
 			undoHotkeyBtn.SetText(currentUndoHotkey)
 			return
 		}
-		startCapture(undoHotkeyBtn, &currentUndoHotkey, func() { updateSaveBtn() })
+		startCapture(undoHotkeyBtn, &currentUndoHotkey, nil, func() { updateSaveBtn() })
+	}
+
+	pttHotkeyBtn := widget.NewButton(pttBtnLabel(cfg.PTTHotkey), nil)
+	pttClearBtn := widget.NewButton("Clear", func() {
+		stopCapture()
+		currentPTTHotkey = ""
+		pttHotkeyBtn.SetText(pttBtnLabel(""))
+		updateSaveBtn()
+	})
+	pttClearBtn.Importance = widget.LowImportance
+	if currentPTTHotkey == "" {
+		pttClearBtn.Disable()
+	}
+	pttHotkeyBtn.OnTapped = func() {
+		if activeCapture == pttHotkeyBtn {
+			stopCapture()
+			pttHotkeyBtn.SetText(pttBtnLabel(currentPTTHotkey))
+			return
+		}
+		startCapture(pttHotkeyBtn, &currentPTTHotkey, pttBtnLabel, func() {
+			pttClearBtn.Enable()
+			updateSaveBtn()
+		})
 	}
 
 	timeoutEntry := widget.NewEntry()
@@ -214,9 +252,6 @@ func showSettingsWindow(fyneApp fyne.App, cfg *config.Config, onSave func(*confi
 
 	punctCheck := widget.NewCheck("Add punctuation", nil)
 	punctCheck.SetChecked(cfg.EnablePunctuation)
-
-	pushToTalkCheck := widget.NewCheck("Push-to-talk (hold key to record, release to submit)", nil)
-	pushToTalkCheck.SetChecked(cfg.PushToTalk)
 
 	saveBtn := widget.NewButton("Save", nil)
 	saveBtn.Importance = widget.HighImportance
@@ -243,9 +278,9 @@ func showSettingsWindow(fyneApp fyne.App, cfg *config.Config, onSave func(*confi
 			fmt.Sprintf("%.1f", sensitivitySlider.Value) != fmt.Sprintf("%.1f", cfg.Sensitivity) ||
 			currentHotkey != cfg.Hotkey ||
 			currentUndoHotkey != cfg.UndoHotkey ||
+			currentPTTHotkey != cfg.PTTHotkey ||
 			timeout != cfg.Timeout ||
-			punctCheck.Checked != cfg.EnablePunctuation ||
-			pushToTalkCheck.Checked != cfg.PushToTalk
+			punctCheck.Checked != cfg.EnablePunctuation
 	}
 
 	updateSaveBtn = func() {
@@ -269,7 +304,6 @@ func showSettingsWindow(fyneApp fyne.App, cfg *config.Config, onSave func(*confi
 	}
 	timeoutEntry.OnChanged = func(_ string) { updateSaveBtn() }
 	punctCheck.OnChanged = func(_ bool) { updateSaveBtn() }
-	pushToTalkCheck.OnChanged = func(_ bool) { updateSaveBtn() }
 
 	doSave := func() {
 		timeout, err := strconv.Atoi(timeoutEntry.Text)
@@ -279,6 +313,7 @@ func showSettingsWindow(fyneApp fyne.App, cfg *config.Config, onSave func(*confi
 		newCfg := &config.Config{
 			Hotkey:            currentHotkey,
 			UndoHotkey:        currentUndoHotkey,
+			PTTHotkey:         currentPTTHotkey,
 			Language:          currentLang(),
 			Timeout:           timeout,
 			SilenceChunks:     int(silenceSlider.Value),
@@ -286,7 +321,6 @@ func showSettingsWindow(fyneApp fyne.App, cfg *config.Config, onSave func(*confi
 			APIKey:            apiKeyEntry.Text,
 			UseAdvancedAPI:    advancedCheck.Checked,
 			EnablePunctuation: punctCheck.Checked,
-			PushToTalk:        pushToTalkCheck.Checked,
 		}
 		onSave(newCfg)
 		*cfg = *newCfg
@@ -319,6 +353,11 @@ func showSettingsWindow(fyneApp fyne.App, cfg *config.Config, onSave func(*confi
 	closeBtn.OnTapped = tryClose
 	w.SetCloseIntercept(tryClose)
 
+	pttHint := widget.NewLabelWithStyle(
+		"Hold this key to record; release to transcribe. Works alongside the toggle hotkey.",
+		fyne.TextAlignLeading, fyne.TextStyle{Italic: true},
+	)
+
 	form := container.New(layout.NewFormLayout(),
 		widget.NewLabelWithStyle("Language", fyne.TextAlignTrailing, fyne.TextStyle{Bold: true}),
 		langSelect,
@@ -341,8 +380,14 @@ func showSettingsWindow(fyneApp fyne.App, cfg *config.Config, onSave func(*confi
 
 		widget.NewSeparator(), widget.NewSeparator(),
 
-		widget.NewLabelWithStyle("Hotkey", fyne.TextAlignTrailing, fyne.TextStyle{Bold: true}),
+		widget.NewLabelWithStyle("Toggle hotkey", fyne.TextAlignTrailing, fyne.TextStyle{Bold: true}),
 		hotkeyBtn,
+
+		widget.NewLabelWithStyle("Push-to-talk", fyne.TextAlignTrailing, fyne.TextStyle{Bold: true}),
+		container.NewBorder(nil, nil, nil, pttClearBtn, pttHotkeyBtn),
+
+		widget.NewLabel(""),
+		pttHint,
 
 		widget.NewLabelWithStyle("Undo hotkey", fyne.TextAlignTrailing, fyne.TextStyle{Bold: true}),
 		undoHotkeyBtn,
@@ -352,11 +397,9 @@ func showSettingsWindow(fyneApp fyne.App, cfg *config.Config, onSave func(*confi
 
 		widget.NewLabel(""),
 		punctCheck,
-
-		widget.NewLabel(""),
-		pushToTalkCheck,
 	)
 
 	w.SetContent(container.NewBorder(nil, container.NewHBox(layout.NewSpacer(), closeBtn, saveBtn), nil, nil, container.NewVScroll(form)))
 	w.Show()
+	return w
 }

@@ -3,7 +3,6 @@ package audio
 import (
 	"context"
 	"fmt"
-	"io"
 	"os/exec"
 )
 
@@ -13,6 +12,10 @@ type Recorder struct {
 }
 
 func (r *Recorder) Start(ctx context.Context) (<-chan []byte, error) {
+	// Stop any previous session before starting a new one so its arecord
+	// process and goroutine are not orphaned.
+	r.Stop()
+
 	ctx, cancel := context.WithCancel(ctx)
 	r.cancel = cancel
 
@@ -35,9 +38,11 @@ func (r *Recorder) Start(ctx context.Context) (<-chan []byte, error) {
 		return nil, fmt.Errorf("starting arecord: %w", err)
 	}
 
+	cmd := r.cmd // capture before r.cmd may be overwritten
 	ch := make(chan []byte, 16)
 	go func() {
 		defer close(ch)
+		defer cmd.Wait() //nolint:errcheck // reap the process to avoid zombies
 		buf := make([]byte, 4096)
 		for {
 			n, err := stdout.Read(buf)
@@ -51,9 +56,6 @@ func (r *Recorder) Start(ctx context.Context) (<-chan []byte, error) {
 				}
 			}
 			if err != nil {
-				if err != io.EOF {
-					return
-				}
 				return
 			}
 		}

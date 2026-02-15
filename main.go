@@ -21,8 +21,9 @@ type app struct {
 	typer      *typing.Typer
 	tray       *ui.Tray
 
-	hkmMu  sync.Mutex
-	hkm    *hotkey.Manager
+	hkmMu   sync.Mutex
+	hkm     *hotkey.Manager // toggle hotkey
+	pttHkm  *hotkey.Manager // push-to-talk hotkey (independent)
 	undoHkm *hotkey.Manager
 
 	mu          sync.Mutex
@@ -45,11 +46,14 @@ func main() {
 	a.recognizer = buildRecognizer(cfg)
 
 	var startupErr error
+
+	// Register toggle hotkey.
 	hkm, err := hotkey.New(cfg.Hotkey)
 	if err != nil {
 		startupErr = err
 	} else {
-		if err := a.registerHotkey(hkm, cfg.PushToTalk); err != nil {
+		if err := hkm.Register(a.toggleDictation); err != nil {
+			hkm.Stop() // close the X11 connection; grab failed
 			startupErr = err
 		} else {
 			a.hkmMu.Lock()
@@ -58,12 +62,28 @@ func main() {
 		}
 	}
 
+	// Register push-to-talk hotkey (independent from toggle).
+	if cfg.PTTHotkey != "" {
+		if pttHkm, err := hotkey.New(cfg.PTTHotkey); err == nil {
+			if err := pttHkm.RegisterPushToTalk(a.startDictation, a.recorder.Stop); err == nil {
+				a.hkmMu.Lock()
+				a.pttHkm = pttHkm
+				a.hkmMu.Unlock()
+			} else {
+				pttHkm.Stop() // close the X11 connection; grab failed
+			}
+		}
+	}
+
 	if cfg.UndoHotkey != "" {
 		if uhkm, err := hotkey.New(cfg.UndoHotkey); err == nil {
-			uhkm.Register(a.undoLastDictation) //nolint:errcheck
-			a.hkmMu.Lock()
-			a.undoHkm = uhkm
-			a.hkmMu.Unlock()
+			if err := uhkm.Register(a.undoLastDictation); err != nil {
+				uhkm.Stop() // close the X11 connection; grab failed
+			} else {
+				a.hkmMu.Lock()
+				a.undoHkm = uhkm
+				a.hkmMu.Unlock()
+			}
 		}
 	}
 
@@ -72,6 +92,7 @@ func main() {
 
 		a.cfgMu.RLock()
 		oldHotkey := a.cfg.Hotkey
+		oldPTTHotkey := a.cfg.PTTHotkey
 		oldUndoHotkey := a.cfg.UndoHotkey
 		a.cfgMu.RUnlock()
 
@@ -82,8 +103,11 @@ func main() {
 		a.cfgMu.Unlock()
 		a.tray.UpdateConfig(newCfg)
 
-		if newCfg.Hotkey != oldHotkey || newCfg.PushToTalk != a.cfg.PushToTalk {
+		if newCfg.Hotkey != oldHotkey {
 			a.rebindHotkey(newCfg.Hotkey)
+		}
+		if newCfg.PTTHotkey != oldPTTHotkey {
+			a.rebindPTTHotkey(newCfg.PTTHotkey)
 		}
 		if newCfg.UndoHotkey != oldUndoHotkey {
 			a.rebindUndoHotkey(newCfg.UndoHotkey)
@@ -101,6 +125,9 @@ func main() {
 		if a.hkm != nil {
 			a.hkm.Stop()
 		}
+		if a.pttHkm != nil {
+			a.pttHkm.Stop()
+		}
 		if a.undoHkm != nil {
 			a.undoHkm.Stop()
 		}
@@ -115,14 +142,52 @@ func (a *app) undoLastDictation() {
 	typer.Undo() //nolint:errcheck
 }
 
-func (a *app) registerHotkey(hkm *hotkey.Manager, pushToTalk bool) error {
-	if pushToTalk {
-		return hkm.RegisterPushToTalk(
-			func() { go a.startDictation() },
-			func() { a.stopDictation() },
-		)
+func (a *app) rebindHotkey(newHotkey string) {
+	a.hkmMu.Lock()
+	defer a.hkmMu.Unlock()
+
+	if a.hkm != nil {
+		a.hkm.Stop()
+		a.hkm = nil
 	}
-	return hkm.Register(a.toggleDictation)
+
+	hkm, err := hotkey.New(newHotkey)
+	if err != nil {
+		a.tray.SetError("Hotkey invalid: " + newHotkey)
+		return
+	}
+	if err := hkm.Register(a.toggleDictation); err != nil {
+		hkm.Stop()
+		a.tray.SetError("Hotkey taken: " + newHotkey)
+		return
+	}
+	a.hkm = hkm
+}
+
+func (a *app) rebindPTTHotkey(newHotkey string) {
+	a.hkmMu.Lock()
+	defer a.hkmMu.Unlock()
+
+	if a.pttHkm != nil {
+		a.pttHkm.Stop()
+		a.pttHkm = nil
+	}
+
+	if newHotkey == "" {
+		return
+	}
+
+	pttHkm, err := hotkey.New(newHotkey)
+	if err != nil {
+		a.tray.SetError("PTT hotkey invalid: " + newHotkey)
+		return
+	}
+	if err := pttHkm.RegisterPushToTalk(a.startDictation, a.recorder.Stop); err != nil {
+		pttHkm.Stop()
+		a.tray.SetError("PTT hotkey taken: " + newHotkey)
+		return
+	}
+	a.pttHkm = pttHkm
 }
 
 func (a *app) rebindUndoHotkey(newHotkey string) {
@@ -140,33 +205,10 @@ func (a *app) rebindUndoHotkey(newHotkey string) {
 		return
 	}
 	if err := uhkm.Register(a.undoLastDictation); err != nil {
+		uhkm.Stop()
 		return
 	}
 	a.undoHkm = uhkm
-}
-
-func (a *app) rebindHotkey(newHotkey string) {
-	a.hkmMu.Lock()
-	defer a.hkmMu.Unlock()
-
-	if a.hkm != nil {
-		a.hkm.Stop()
-		a.hkm = nil
-	}
-
-	hkm, err := hotkey.New(newHotkey)
-	if err != nil {
-		a.tray.SetError("Hotkey invalid: " + newHotkey)
-		return
-	}
-	a.cfgMu.RLock()
-	ptt := a.cfg.PushToTalk
-	a.cfgMu.RUnlock()
-	if err := a.registerHotkey(hkm, ptt); err != nil {
-		a.tray.SetError("Hotkey taken: " + newHotkey)
-		return
-	}
-	a.hkm = hkm
 }
 
 func buildRecognizer(cfg *config.Config) *speech.Recognizer {

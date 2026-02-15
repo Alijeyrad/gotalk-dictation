@@ -61,7 +61,11 @@ cp tests/integration/testdata/alsa_null.conf ~/.asoundrc
 GOINSTALLED=$(go version | awk '{print $3}' | sed 's/go//')
 go mod edit -go="$GOINSTALLED" -toolchain=none
 # Run unit tests (no X11 required).
-go test -v -count=1 ./...
+# Exclude root package and internal/ui: both import Fyne's OpenGL renderer
+# which requires GL headers unavailable in a headless container.
+go list ./... \
+  | grep -v -E '^github\.com/Alijeyrad/gotalk-dictation($|/internal/ui$|/tests/)' \
+  | xargs go test -v -count=1
 # Start Xvfb for X11 integration tests.
 Xvfb :99 -screen 0 1280x720x24 &
 XVFB_PID=$!

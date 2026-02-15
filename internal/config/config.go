@@ -9,8 +9,12 @@ import (
 type Config struct {
 	Hotkey     string `json:"hotkey"`
 	UndoHotkey string `json:"undo_hotkey"`
-	Language   string `json:"language"`
-	Timeout    int    `json:"timeout"`
+	// PTTHotkey is a separate push-to-talk hotkey (hold to record, release to
+	// transcribe). When non-empty it operates independently of Hotkey so both
+	// toggle and PTT can be used at the same time.
+	PTTHotkey string `json:"ptt_hotkey"`
+	Language  string `json:"language"`
+	Timeout   int    `json:"timeout"`
 
 	// SilenceChunks is consecutive silent chunks (~62 ms each) that end a phrase.
 	SilenceChunks int `json:"silence_chunks"`
@@ -22,7 +26,6 @@ type Config struct {
 	APIKey            string `json:"api_key,omitempty"`
 	UseAdvancedAPI    bool   `json:"use_advanced_api"`
 	EnablePunctuation bool   `json:"enable_punctuation"`
-	PushToTalk        bool   `json:"push_to_talk"`
 }
 
 func Default() *Config {
