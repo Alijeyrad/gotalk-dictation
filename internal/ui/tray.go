@@ -21,6 +21,7 @@ type Tray struct {
 	fyneApp     fyne.App
 	popup       *X11Popup
 	settingsWin fyne.Window // non-nil while the settings window is open
+	aboutWin    fyne.Window // non-nil while the about window is open
 
 	// popupGen is incremented on every state transition that should own the
 	// popup. The auto-hide goroutines in SetDone/SetError capture their
@@ -44,7 +45,7 @@ func (t *Tray) Run(cfg *config.Config, onDictate func(), onQuit func(), startupE
 		t.popup = popup
 	}
 
-	a := app.NewWithID("com.alijeyrad.gotalk-dictation")
+	a := app.NewWithID("com.alijeyrad.GoTalkDictation")
 	t.fyneApp = a
 
 	settingsItem := fyne.NewMenuItem("Settings…", func() {
@@ -65,10 +66,22 @@ func (t *Tray) Run(cfg *config.Config, onDictate func(), onQuit func(), startupE
 		win.SetOnClosed(func() { t.settingsWin = nil })
 	})
 
+	aboutItem := fyne.NewMenuItem("About…", func() {
+		if t.aboutWin != nil {
+			t.aboutWin.Show()
+			t.aboutWin.RequestFocus()
+			return
+		}
+		win := showAboutWindow(t.fyneApp)
+		t.aboutWin = win
+		win.SetOnClosed(func() { t.aboutWin = nil })
+	})
+
 	menu := fyne.NewMenu("GoTalk",
 		fyne.NewMenuItem("Start Dictation", onDictate),
 		fyne.NewMenuItemSeparator(),
 		settingsItem,
+		aboutItem,
 		fyne.NewMenuItemSeparator(),
 		fyne.NewMenuItem("Quit", func() {
 			onQuit()

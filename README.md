@@ -2,7 +2,10 @@
 
 A fast, native Linux speech-to-text app. Press a hotkey anywhere, speak, and the transcribed text is typed at your cursor.
 
-![License](https://img.shields.io/badge/license-MIT-blue.svg)
+[![CI](https://github.com/Alijeyrad/gotalk-dictation/actions/workflows/ci.yml/badge.svg)](https://github.com/Alijeyrad/gotalk-dictation/actions/workflows/ci.yml)
+[![Latest release](https://img.shields.io/github/v/release/Alijeyrad/gotalk-dictation)](https://github.com/Alijeyrad/gotalk-dictation/releases/latest)
+[![Go version](https://img.shields.io/github/go-mod/go-version/Alijeyrad/gotalk-dictation)](go.mod)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 ## Features
 
@@ -17,6 +20,36 @@ A fast, native Linux speech-to-text app. Press a hotkey anywhere, speak, and the
 - **25 languages** — including regional variants; see full list in Settings
 - **No ffmpeg** — pure Go FLAC encoder, no external audio tools needed
 - **Two API modes** — free public Google API (no account needed) or Google Cloud Speech API
+
+## Installation
+
+### From a release (recommended)
+
+Download the latest binary from the [Releases](https://github.com/Alijeyrad/gotalk-dictation/releases/latest) page:
+
+```bash
+# Install runtime deps first (see below)
+curl -Lo gotalk-dictation.tar.gz \
+  https://github.com/Alijeyrad/gotalk-dictation/releases/latest/download/gotalk-dictation_VERSION_linux_amd64.tar.gz
+tar xf gotalk-dictation.tar.gz
+sudo install -m755 gotalk-dictation /usr/local/bin/
+sudo install -m644 com.alijeyrad.GoTalkDictation.desktop /usr/share/applications/
+```
+
+### Via Flatpak
+
+> Flatpak packaging is in progress. Instructions will be added once the app is submitted to Flathub.
+> See [`packaging/flatpak/`](packaging/flatpak/) for build instructions.
+
+### From source
+
+```bash
+git clone https://github.com/Alijeyrad/gotalk-dictation.git
+cd gotalk-dictation
+make deps      # install system build deps (dnf/apt/pacman)
+make install   # builds and installs to /usr/local/bin + system .desktop file
+make autostart # optional: start at login
+```
 
 ## Prerequisites
 
@@ -33,10 +66,10 @@ sudo apt install -y alsa-utils xdotool xclip
 sudo pacman -S alsa-utils xdotool xclip
 ```
 
-`arecord` (from `alsa-utils`) captures the microphone.
-`xdotool` types short transcripts; `xclip` pastes longer ones (≥50 chars) for near-instant insertion.
+- `arecord` (from `alsa-utils`) captures the microphone.
+- `xdotool` types short transcripts; `xclip` pastes longer ones (≥50 chars) for near-instant insertion.
 
-### Build dependencies
+### Build dependencies (source only)
 
 ```bash
 # Fedora/RHEL
@@ -49,21 +82,6 @@ sudo apt install -y gcc libx11-dev libxcursor-dev libxrandr-dev \
 
 # Arch
 sudo pacman -S gcc libx11 libxcursor libxrandr libxinerama libxi mesa
-```
-
-## Installation
-
-```bash
-git clone https://github.com/Alijeyrad/gotalk-dictation.git
-cd gotalk-dictation
-make install     # builds and installs to /usr/local/bin + system .desktop file
-make autostart   # optional: start at login
-```
-
-Or build manually:
-
-```bash
-make build       # output: build/gotalk-dictation
 ```
 
 ## Usage
@@ -105,9 +123,9 @@ Open **Settings** from the tray icon. All changes apply immediately — no resta
 | Sensitivity                 | RMS threshold multiplier — lower picks up quieter voices  |
 | Hotkey                      | Click and press any modifier+key combination              |
 | Undo hotkey                 | Hotkey to backspace the last dictated text                |
+| Push-to-talk hotkey         | Hold key to record, release to submit                     |
 | Max duration                | Hard timeout for a single dictation session               |
 | Add punctuation             | Enable spoken punctuation commands                        |
-| Push-to-talk                | Hold key to record, release to submit                     |
 
 ### Google Cloud Speech API (optional)
 
@@ -127,6 +145,7 @@ Without credentials, the free public endpoint is used — no account needed.
 ```json
 {
   "hotkey": "Alt-d",
+  "ptt_hotkey": "",
   "undo_hotkey": "Alt-z",
   "language": "en-US",
   "timeout": 60,
@@ -134,8 +153,7 @@ Without credentials, the free public endpoint is used — no account needed.
   "sensitivity": 2.5,
   "api_key": "",
   "use_advanced_api": false,
-  "enable_punctuation": true,
-  "push_to_talk": false
+  "enable_punctuation": true
 }
 ```
 
@@ -143,29 +161,36 @@ Without credentials, the free public endpoint is used — no account needed.
 
 ```
 gotalk-dictation/
-├── main.go
+├── main.go              — app struct, main(), callbacks
+├── hotkeys.go           — hotkey binding and rebinding helpers
+├── dictation.go         — dictation lifecycle (start/stop/toggle/undo)
 └── internal/
-    ├── audio/recorder.go      — mic capture via arecord
-    ├── config/config.go       — load/save ~/.config/gotalk-dictation/config.json
-    ├── hotkey/manager.go      — global X11 key grab (toggle + push-to-talk)
-    ├── speech/
-    │   ├── recognizer.go      — VAD + free/cloud API
-    │   └── flac.go            — pure Go FLAC encoder
-    ├── typing/typer.go        — xdotool/clipboard text insertion, punctuation, undo
-    └── ui/
-        ├── tray.go            — Fyne system tray + menu
-        ├── settings.go        — settings window
-        └── popup.go           — X11 animated overlay with transcript preview
+    ├── audio/           — mic capture via arecord
+    ├── config/          — load/save ~/.config/gotalk-dictation/config.json
+    ├── hotkey/          — global X11 key grab (toggle + push-to-talk)
+    ├── speech/          — VAD + free/cloud API + pure Go FLAC encoder
+    ├── typing/          — xdotool/clipboard text insertion, punctuation, undo
+    ├── ui/              — Fyne system tray, settings window, X11 overlay popup
+    └── version/         — build-time version info (injected via ldflags)
 ```
+
+## Contributing
+
+1. Fork the repo and create a branch
+2. `make fmt && make vet && make test` before opening a PR
+3. Keep X11-specific code behind build tags where applicable
+4. PRs welcome for bug fixes, language additions, and packaging improvements
 
 ## Roadmap
 
-- **Segmented dictation** — send audio to the API on natural pauses so text appears clause-by-clause while speaking (works with free API)
-- **Streaming dictation** — real-time interim results typed as you speak, corrected on final result (Google Cloud Speech API only)
+- **Segmented dictation** — send audio to the API on natural pauses so text appears clause-by-clause while speaking
+- **Streaming dictation** — real-time interim results typed as you speak (Google Cloud Speech API only)
+- **AUR package** — for Arch Linux users
+- **Flathub** — once Flatpak manifest is complete
 
 ## License
 
-MIT — see LICENSE file.
+MIT — see [LICENSE](LICENSE).
 
 ---
 

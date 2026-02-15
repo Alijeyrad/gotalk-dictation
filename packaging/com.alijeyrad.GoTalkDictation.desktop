@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=GoTalk Dictation
+GenericName=Speech-to-Text
+Comment=System-wide speech-to-text dictation with global hotkeys
+Exec=gotalk-dictation
+Icon=com.alijeyrad.GoTalkDictation
+Categories=Accessibility;Utility;
+Keywords=dictation;speech;voice;typing;accessibility;
+StartupNotify=false
+X-GNOME-Autostart-Delay=2

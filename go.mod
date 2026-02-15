@@ -1,6 +1,6 @@
 module github.com/Alijeyrad/gotalk-dictation
 
-go 1.25.7
+go 1.24.2
 
 require (
 	cloud.google.com/go/speech v1.29.0

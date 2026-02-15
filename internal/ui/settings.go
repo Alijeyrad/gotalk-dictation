@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -13,6 +14,7 @@ import (
 	"fyne.io/fyne/v2/widget"
 
 	"github.com/Alijeyrad/gotalk-dictation/internal/config"
+	"github.com/Alijeyrad/gotalk-dictation/internal/version"
 )
 
 var languages = []struct{ code, label string }{
@@ -399,7 +401,74 @@ func showSettingsWindow(fyneApp fyne.App, cfg *config.Config, onSave func(*confi
 		punctCheck,
 	)
 
-	w.SetContent(container.NewBorder(nil, container.NewHBox(layout.NewSpacer(), closeBtn, saveBtn), nil, nil, container.NewVScroll(form)))
+	versionLabel := widget.NewLabelWithStyle(
+		fmt.Sprintf("v%s (%s)", version.Version, version.Commit),
+		fyne.TextAlignCenter,
+		fyne.TextStyle{Italic: true},
+	)
+
+	w.SetContent(container.NewBorder(
+		nil,
+		container.NewVBox(
+			versionLabel,
+			container.NewHBox(layout.NewSpacer(), closeBtn, saveBtn),
+		),
+		nil, nil,
+		container.NewVScroll(form),
+	))
+	w.Show()
+	return w
+}
+
+func showAboutWindow(fyneApp fyne.App) fyne.Window {
+	w := fyneApp.NewWindow("About GoTalk Dictation")
+	w.SetIcon(fyne.NewStaticResource("icon.png", iconPNG))
+	w.Resize(fyne.NewSize(360, 300))
+	w.SetFixedSize(true)
+
+	icon := fyne.NewStaticResource("icon.png", iconPNG)
+	iconWidget := widget.NewIcon(icon)
+
+	title := widget.NewLabelWithStyle("GoTalk Dictation",
+		fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
+	ver := widget.NewLabelWithStyle(
+		fmt.Sprintf("Version %s  ·  commit %s", version.Version, version.Commit),
+		fyne.TextAlignCenter, fyne.TextStyle{Italic: true})
+	desc := widget.NewLabelWithStyle(
+		"System-wide speech-to-text dictation for Linux",
+		fyne.TextAlignCenter, fyne.TextStyle{})
+	desc.Wrapping = fyne.TextWrapWord
+
+	ghURL, _ := url.Parse("https://github.com/Alijeyrad/gotalk-dictation")
+	issuesURL, _ := url.Parse("https://github.com/Alijeyrad/gotalk-dictation/issues")
+
+	links := container.NewHBox(
+		layout.NewSpacer(),
+		widget.NewHyperlink("GitHub", ghURL),
+		widget.NewLabel("·"),
+		widget.NewHyperlink("Report an issue", issuesURL),
+		layout.NewSpacer(),
+	)
+
+	license := widget.NewLabelWithStyle("MIT License · © Ali Julaee Rad",
+		fyne.TextAlignCenter, fyne.TextStyle{})
+
+	closeBtn := widget.NewButton("Close", func() { w.Close() })
+	closeBtn.Importance = widget.LowImportance
+
+	content := container.NewVBox(
+		container.NewCenter(iconWidget),
+		title,
+		ver,
+		widget.NewSeparator(),
+		desc,
+		links,
+		widget.NewSeparator(),
+		license,
+		container.NewCenter(closeBtn),
+	)
+
+	w.SetContent(container.NewPadded(content))
 	w.Show()
 	return w
 }

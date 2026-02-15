@@ -1,7 +1,10 @@
 BINARY    := gotalk-dictation
 BUILD_DIR := build
 BIN       := $(BUILD_DIR)/$(BINARY)
-LDFLAGS   := -ldflags="-s -w"
+VERSION   := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+COMMIT    := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
+PKG       := github.com/Alijeyrad/gotalk-dictation/internal/version
+LDFLAGS   := -ldflags="-s -w -X $(PKG).Version=$(VERSION) -X $(PKG).Commit=$(COMMIT)"
 
 # --- Colors ---
 RESET  := \033[0m
@@ -22,7 +25,10 @@ build: ## Compile the binary into build/
 	@go build $(LDFLAGS) -trimpath -o $(BIN) .
 	@printf "$(GREEN)Built: $(BIN)$(RESET)\n"
 
-run: build ## Build and run
+run: build ## Build and run (installs .desktop to ~/.local/share/applications/ for portal registration)
+	@mkdir -p ~/.local/share/applications
+	@install -m644 packaging/com.alijeyrad.GoTalkDictation.desktop \
+		~/.local/share/applications/com.alijeyrad.GoTalkDictation.desktop
 	@printf "$(BLUE)Starting $(BINARY)...$(RESET)\n"
 	@$(BIN)
 
@@ -36,15 +42,18 @@ clean: ## Remove the build directory
 install: build ## Install binary + .desktop file system-wide
 	@printf "$(BLUE)Installing $(BINARY)...$(RESET)\n"
 	@sudo install -m 755 $(BIN) /usr/local/bin/$(BINARY)
-	@printf '[Desktop Entry]\nType=Application\nName=GoTalk Dictation\nComment=System-wide speech-to-text dictation\nExec=$(BINARY)\nIcon=audio-input-microphone\nCategories=Accessibility;Utility;\nNoDisplay=true\n' \
-		| sudo tee /usr/share/applications/$(BINARY).desktop >/dev/null
+	@sudo install -m 644 packaging/com.alijeyrad.GoTalkDictation.desktop \
+		/usr/share/applications/com.alijeyrad.GoTalkDictation.desktop
+	@sudo install -m 644 packaging/com.alijeyrad.GoTalkDictation.metainfo.xml \
+		/usr/share/metainfo/com.alijeyrad.GoTalkDictation.metainfo.xml 2>/dev/null || true
 	@printf "$(GREEN)Installed to /usr/local/bin/$(BINARY)$(RESET)\n"
-	@printf "$(GREEN)Desktop entry: /usr/share/applications/$(BINARY).desktop$(RESET)\n"
+	@printf "$(GREEN)Desktop entry: /usr/share/applications/com.alijeyrad.GoTalkDictation.desktop$(RESET)\n"
 
 uninstall: ## Remove the installed binary and desktop file
 	@printf "$(RED)Uninstalling $(BINARY)...$(RESET)\n"
 	@sudo rm -f /usr/local/bin/$(BINARY)
-	@sudo rm -f /usr/share/applications/$(BINARY).desktop
+	@sudo rm -f /usr/share/applications/com.alijeyrad.GoTalkDictation.desktop
+	@sudo rm -f /usr/share/metainfo/com.alijeyrad.GoTalkDictation.metainfo.xml
 	@printf "$(GREEN)Uninstalled!$(RESET)\n"
 
 autostart: ## Add a login autostart entry for the current user

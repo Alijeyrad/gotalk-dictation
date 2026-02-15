@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>com.alijeyrad.GoTalkDictation</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+
+  <name>GoTalk Dictation</name>
+  <summary>System-wide speech-to-text dictation with global hotkeys</summary>
+
+  <description>
+    <p>
+      GoTalk Dictation is a lightweight, system-wide speech-to-text tool for Linux
+      that types spoken words into any application using global hotkeys.
+    </p>
+    <p>Features:</p>
+    <ul>
+      <li>Global toggle hotkey (default: Alt+D) — press once to start, again to stop</li>
+      <li>Push-to-talk hotkey — hold to record, release to transcribe</li>
+      <li>Undo hotkey to remove last dictated text</li>
+      <li>Voice Activity Detection — auto-stops on silence</li>
+      <li>25 supported languages</li>
+      <li>Punctuation commands ("period", "new line", etc.)</li>
+      <li>Two API modes: free Google endpoint and Google Cloud Speech API</li>
+      <li>Visual overlay showing recording state and transcript preview</li>
+      <li>System tray icon with settings window</li>
+    </ul>
+  </description>
+
+  <launchable type="desktop-id">com.alijeyrad.GoTalkDictation.desktop</launchable>
+
+  <url type="homepage">https://github.com/Alijeyrad/gotalk-dictation</url>
+  <url type="bugtracker">https://github.com/Alijeyrad/gotalk-dictation/issues</url>
+
+  <developer id="com.alijeyrad">
+    <name>Ali Julaee Rad</name>
+  </developer>
+
+  <categories>
+    <category>Accessibility</category>
+    <category>Utility</category>
+  </categories>
+
+  <keywords>
+    <keyword>dictation</keyword>
+    <keyword>speech</keyword>
+    <keyword>voice</keyword>
+    <keyword>typing</keyword>
+    <keyword>accessibility</keyword>
+    <keyword>transcription</keyword>
+  </keywords>
+
+  <requires>
+    <display_length compare="ge">800</display_length>
+    <internet>always</internet>
+  </requires>
+
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+  </supports>
+
+  <content_rating type="oars-1.1"/>
+
+  <releases>
+    <release version="1.0.0" date="2026-02-15">
+      <description>
+        <p>Initial release with toggle and push-to-talk hotkeys, VAD, 25 languages,
+        Flatpak support, and system tray UI.</p>
+      </description>
+    </release>
+  </releases>
+</component>
