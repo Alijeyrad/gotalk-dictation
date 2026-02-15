@@ -55,8 +55,7 @@ modules:
       - install -Dm644 internal/ui/assets/icon.png
             /app/share/icons/hicolor/128x128/apps/com.alijeyrad.GoTalkDictation.png
     sources:
-      # Replace the url/tag with your actual release tag.
       - type: git
         url: https://github.com/Alijeyrad/gotalk-dictation.git
-        tag: v1.0.0
-        commit: REPLACE_WITH_ACTUAL_COMMIT_HASH
+        tag: v1.0.2
+        commit: 5b95e024a58b7d446628699075d774360ec23c4a
