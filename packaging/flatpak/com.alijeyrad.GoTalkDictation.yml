@@ -58,4 +58,4 @@ modules:
       - type: git
         url: https://github.com/Alijeyrad/gotalk-dictation.git
         tag: v1.0.2
-        commit: 5b95e024a58b7d446628699075d774360ec23c4a
+        commit: f6352af8de91cee4bff38ea88b2059e5e8d94d5d
