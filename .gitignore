@@ -17,8 +17,8 @@ coverage.*
 *.coverprofile
 profile.cov
 
-# Dependency directories (remove the comment below to include it)
-vendor/
+# Dependency directories — vendor/ is committed for Flatpak offline builds
+# vendor/
 
 # Go workspace file
 go.work

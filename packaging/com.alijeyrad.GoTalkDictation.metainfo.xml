@@ -62,6 +62,16 @@
   <content_rating type="oars-1.1"/>
 
   <releases>
+    <release version="1.0.2" date="2026-02-15">
+      <description>
+        <p>Add security vulnerability reporting policy (SECURITY.md).</p>
+      </description>
+    </release>
+    <release version="1.0.1" date="2026-02-15">
+      <description>
+        <p>Upgrade to Go 1.26; add release installer script and distro package support.</p>
+      </description>
+    </release>
     <release version="1.0.0" date="2026-02-15">
       <description>
         <p>Initial release with toggle and push-to-talk hotkeys, VAD, 25 languages,
