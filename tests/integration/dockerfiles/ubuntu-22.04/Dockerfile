@@ -14,8 +14,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Go 1.23
-RUN wget -q https://go.dev/dl/go1.23.5.linux-amd64.tar.gz \
-    && tar -C /usr/local -xzf go1.23.5.linux-amd64.tar.gz \
-    && rm go1.23.5.linux-amd64.tar.gz
+RUN wget -q https://go.dev/dl/go1.24.2.linux-amd64.tar.gz \
+    && tar -C /usr/local -xzf go1.24.2.linux-amd64.tar.gz \
+    && rm go1.24.2.linux-amd64.tar.gz
 
 WORKDIR /workspace
