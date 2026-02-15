@@ -13,9 +13,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     alsa-utils xdotool xclip xvfb \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Go 1.23
-RUN wget -q https://go.dev/dl/go1.24.2.linux-amd64.tar.gz \
-    && tar -C /usr/local -xzf go1.24.2.linux-amd64.tar.gz \
-    && rm go1.24.2.linux-amd64.tar.gz
+# Install Go 1.26
+RUN wget -q https://go.dev/dl/go1.26.0.linux-amd64.tar.gz \
+    && tar -C /usr/local -xzf go1.26.0.linux-amd64.tar.gz \
+    && rm go1.26.0.linux-amd64.tar.gz
 
 WORKDIR /workspace

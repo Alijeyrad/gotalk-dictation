@@ -21,7 +21,30 @@ archives:
     files:
       - LICENSE
       - README.md
+      - install.sh
       - packaging/com.alijeyrad.GoTalkDictation.desktop
+      - packaging/com.alijeyrad.GoTalkDictation.metainfo.xml
+
+nfpms:
+  - id: packages
+    package_name: gotalk-dictation
+    vendor: Alijeyrad
+    homepage: https://github.com/Alijeyrad/gotalk-dictation
+    maintainer: Ali Julaee Rad
+    description: System-wide speech-to-text dictation for X11
+    license: MIT
+    formats:
+      - deb
+      - rpm
+    dependencies:
+      - alsa-utils
+      - xdotool
+      - xclip
+    contents:
+      - src: packaging/com.alijeyrad.GoTalkDictation.desktop
+        dst: /usr/share/applications/com.alijeyrad.GoTalkDictation.desktop
+      - src: packaging/com.alijeyrad.GoTalkDictation.metainfo.xml
+        dst: /usr/share/metainfo/com.alijeyrad.GoTalkDictation.metainfo.xml
 
 checksum:
   name_template: checksums.txt

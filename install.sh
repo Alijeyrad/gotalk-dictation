@@ -1,178 +1,99 @@
 #!/usr/bin/env bash
-# GoTalk Dictation — dependency installer and build script
+# install.sh — GoTalk Dictation release installer
+# Installs the pre-built binary, desktop entry, and runtime dependencies.
+# Run as a normal user; sudo is invoked only where needed.
 set -euo pipefail
 
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m'
+BINARY=gotalk-dictation
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-info()    { echo -e "${BLUE}[INFO]${NC} $*"; }
-success() { echo -e "${GREEN}[OK]${NC} $*"; }
-warn()    { echo -e "${YELLOW}[WARN]${NC} $*"; }
-die()     { echo -e "${RED}[ERR]${NC} $*" >&2; exit 1; }
+RED='\033[0;31m'; GREEN='\033[0;32m'; BLUE='\033[0;34m'; YELLOW='\033[1;33m'; NC='\033[0m'
+info()  { echo -e "${BLUE}[INFO]${NC} $*"; }
+ok()    { echo -e "${GREEN}[OK]${NC} $*"; }
+warn()  { echo -e "${YELLOW}[WARN]${NC} $*"; }
+die()   { echo -e "${RED}[ERR]${NC} $*" >&2; exit 1; }
 
-# ---- detect distro ----------------------------------------------------------
+# ── runtime dependencies (no build deps needed — binary is pre-compiled) ──────
 
-detect_distro() {
-    if [ -f /etc/os-release ]; then
-        . /etc/os-release
-        echo "${ID}"
+install_runtime_deps() {
+    info "Installing runtime dependencies (alsa-utils, xdotool, xclip)…"
+    if command -v apt-get >/dev/null 2>&1; then
+        sudo apt-get install -y alsa-utils xdotool xclip
+    elif command -v dnf >/dev/null 2>&1; then
+        sudo dnf install -y alsa-utils xdotool xclip
+    elif command -v pacman >/dev/null 2>&1; then
+        sudo pacman -S --needed --noconfirm alsa-utils xdotool xclip
     else
-        die "Cannot detect Linux distribution."
+        warn "Unknown package manager. Please install manually: alsa-utils xdotool xclip"
     fi
 }
 
-DISTRO=$(detect_distro)
+# ── install binary + desktop files ────────────────────────────────────────────
 
-# ---- system dependencies ----------------------------------------------------
+install_files() {
+    info "Installing $BINARY to /usr/local/bin/…"
+    sudo install -m 755 "$SCRIPT_DIR/$BINARY" /usr/local/bin/$BINARY
 
-install_deps_fedora() {
-    info "Installing system dependencies (Fedora/RHEL)..."
-    sudo dnf install -y \
-        libX11-devel \
-        libXcursor-devel \
-        libXrandr-devel \
-        libXinerama-devel \
-        libXi-devel \
-        libXxf86vm-devel \
-        mesa-libGL-devel \
-        alsa-utils \
-        xdotool \
-        xclip
+    info "Installing desktop entry…"
+    sudo install -Dm 644 \
+        "$SCRIPT_DIR/packaging/com.alijeyrad.GoTalkDictation.desktop" \
+        /usr/share/applications/com.alijeyrad.GoTalkDictation.desktop
+
+    if [[ -f "$SCRIPT_DIR/packaging/com.alijeyrad.GoTalkDictation.metainfo.xml" ]]; then
+        sudo install -Dm 644 \
+            "$SCRIPT_DIR/packaging/com.alijeyrad.GoTalkDictation.metainfo.xml" \
+            /usr/share/metainfo/com.alijeyrad.GoTalkDictation.metainfo.xml
+    fi
 }
 
-install_deps_ubuntu() {
-    info "Installing system dependencies (Ubuntu/Debian)..."
-    sudo apt-get update -q
-    sudo apt-get install -y \
-        libx11-dev \
-        libxcursor-dev \
-        libxrandr-dev \
-        libxinerama-dev \
-        libxi-dev \
-        libxxf86vm-dev \
-        libgl1-mesa-dev \
-        alsa-utils \
-        xdotool \
-        xclip
-}
+# ── optional autostart ─────────────────────────────────────────────────────────
 
-install_deps_arch() {
-    info "Installing system dependencies (Arch)..."
-    sudo pacman -S --needed \
-        libx11 \
-        libxcursor \
-        libxrandr \
-        libxinerama \
-        libxi \
-        libxxf86vm \
-        mesa \
-        alsa-utils \
-        xdotool \
-        xclip
-}
-
-case "$DISTRO" in
-    fedora|rhel|centos|rocky|almalinux)
-        install_deps_fedora ;;
-    ubuntu|debian|linuxmint|pop)
-        install_deps_ubuntu ;;
-    arch|manjaro|endeavouros|garuda)
-        install_deps_arch ;;
-    *)
-        warn "Unknown distro '$DISTRO'. Checking for required tools manually..."
-        MISSING=()
-        for tool in arecord xdotool xclip; do
-            command -v "$tool" &>/dev/null || MISSING+=("$tool")
-        done
-        if [ ${#MISSING[@]} -gt 0 ]; then
-            die "Missing tools: ${MISSING[*]}. Install them with your package manager and re-run."
-        fi
-        ;;
-esac
-
-success "System dependencies installed."
-
-# ---- Go toolchain -----------------------------------------------------------
-
-if ! command -v go &>/dev/null; then
-    die "Go is not installed. Install from https://go.dev/dl/ and re-run."
-fi
-
-GO_VERSION=$(go version | awk '{print $3}' | sed 's/go//')
-info "Go version: $GO_VERSION"
-
-# ---- build ------------------------------------------------------------------
-
-info "Downloading Go module dependencies..."
-go mod download
-
-info "Building gotalk-dictation..."
-go build -ldflags="-s -w" -o gotalk-dictation .
-
-success "Built: $(pwd)/gotalk-dictation"
-
-# ---- optional install -------------------------------------------------------
-
-read -r -p "Install to /usr/local/bin? [y/N] " REPLY
-if [[ "${REPLY,,}" == "y" ]]; then
-    sudo install -m 755 gotalk-dictation /usr/local/bin/gotalk-dictation
-    success "Installed to /usr/local/bin/gotalk-dictation"
-
-    # Install a system desktop file so KDE/PipeWire can identify the app and
-    # remember the microphone permission grant across sessions.
-    sudo tee /usr/share/applications/gotalk-dictation.desktop >/dev/null <<'EOF'
+setup_autostart() {
+    local autostart_dir="$HOME/.config/autostart"
+    mkdir -p "$autostart_dir"
+    cat > "$autostart_dir/$BINARY.desktop" <<EOF
 [Desktop Entry]
 Type=Application
 Name=GoTalk Dictation
-Comment=System-wide speech-to-text dictation
-Exec=gotalk-dictation
-Icon=audio-input-microphone
-Categories=Accessibility;Utility;
-NoDisplay=true
-EOF
-    success "Desktop entry installed to /usr/share/applications/gotalk-dictation.desktop"
-fi
-
-# ---- hotkey setup reminder --------------------------------------------------
-
-echo ""
-echo -e "${YELLOW}━━━ Hotkey Setup ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo "  GoTalk uses Alt+D as its global hotkey."
-echo ""
-echo "  If Alt+D is already bound in your DE (e.g. an old dictation script):"
-echo "    GNOME:  Settings → Keyboard → Keyboard Shortcuts → find Alt+D → remove"
-echo "    KDE:    System Settings → Shortcuts → find Alt+D → remove"
-echo "    XFCE:   Settings → Keyboard → Application Shortcuts → find Alt+D → remove"
-echo ""
-echo "  To use a different hotkey, edit:"
-echo "    ~/.config/gotalk-dictation/config.json  → change \"hotkey\": \"Alt-d\""
-echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo ""
-
-# ---- autostart (optional) ---------------------------------------------------
-
-AUTOSTART_DIR="${HOME}/.config/autostart"
-DESKTOP_FILE="${AUTOSTART_DIR}/gotalk-dictation.desktop"
-BINARY_PATH="$(command -v gotalk-dictation 2>/dev/null || echo "$(pwd)/gotalk-dictation")"
-
-read -r -p "Add to autostart (runs at login)? [y/N] " REPLY
-if [[ "${REPLY,,}" == "y" ]]; then
-    mkdir -p "$AUTOSTART_DIR"
-    cat > "$DESKTOP_FILE" <<EOF
-[Desktop Entry]
-Type=Application
-Name=GoTalk Dictation
-Exec=${BINARY_PATH}
+Exec=/usr/local/bin/$BINARY
 Icon=audio-input-microphone
 Comment=System-wide speech-to-text dictation
 Categories=Accessibility;Utility;
 X-GNOME-Autostart-enabled=true
 EOF
-    success "Autostart entry created: $DESKTOP_FILE"
-fi
+    ok "Autostart entry created: $autostart_dir/$BINARY.desktop"
+}
+
+# ── cleanup ────────────────────────────────────────────────────────────────────
+
+cleanup() {
+    info "Removing installation files from $SCRIPT_DIR…"
+    rm -rf "$SCRIPT_DIR"
+    ok "Cleaned up."
+}
+
+# ── main ───────────────────────────────────────────────────────────────────────
 
 echo ""
-success "Done! Run with:  ./gotalk-dictation"
+echo "  GoTalk Dictation — Installer"
+echo "  ──────────────────────────────"
+echo ""
+
+[[ -f "$SCRIPT_DIR/$BINARY" ]] || die "Binary '$BINARY' not found in $SCRIPT_DIR"
+
+install_runtime_deps
+install_files
+
+ok ""
+ok "  Installed! You can now run: $BINARY"
+ok "  Or launch it from your application menu."
+ok ""
+
+read -r -p "Add GoTalk to autostart (runs at login)? [y/N] " ans
+[[ "${ans,,}" == "y" ]] && setup_autostart
+
+read -r -p "Remove these installation files? [Y/n] " ans
+ans="${ans:-Y}"
+[[ "${ans,,}" == "y" ]] && cleanup || ok "Files kept in $SCRIPT_DIR."
+
+echo ""
