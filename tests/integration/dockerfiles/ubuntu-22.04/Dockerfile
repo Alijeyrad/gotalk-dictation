@@ -10,7 +10,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     wget ca-certificates \
     libx11-dev libxcursor-dev libxrandr-dev libxinerama-dev \
     libxi-dev libxxf86vm-dev libgl1-mesa-dev \
-    alsa-utils xdotool xclip xvfb \
+    xvfb \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Go 1.26

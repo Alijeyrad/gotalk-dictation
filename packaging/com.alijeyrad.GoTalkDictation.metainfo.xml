@@ -9,21 +9,18 @@
 
   <description>
     <p>
-      GoTalk Dictation is a lightweight, system-wide speech-to-text tool for Linux
-      that types spoken words into any application using global hotkeys.
+      GoTalk Dictation is inspired by the dictation feature on macOS — a global hotkey
+      that lets you speak and have the words typed wherever your cursor is. I built it
+      to scratch my own itch: Linux didn't have anything that just worked the same way.
+      I use it every day, mostly for typing long prompts and messages without touching
+      the keyboard.
     </p>
-    <p>Features:</p>
-    <ul>
-      <li>Global toggle hotkey (default: Alt+D) — press once to start, again to stop</li>
-      <li>Push-to-talk hotkey — hold to record, release to transcribe</li>
-      <li>Undo hotkey to remove last dictated text</li>
-      <li>Voice Activity Detection — auto-stops on silence</li>
-      <li>25 supported languages</li>
-      <li>Punctuation commands ("period", "new line", etc.)</li>
-      <li>Two API modes: free Google endpoint and Google Cloud Speech API</li>
-      <li>Visual overlay showing recording state and transcript preview</li>
-      <li>System tray icon with settings window</li>
-    </ul>
+    <p>
+      Press the hotkey, speak, and the transcribed text appears in whichever app is focused.
+      It uses Google's speech recognition (free, no account needed) and stops automatically
+      when you go silent. A push-to-talk mode is also available if you prefer to hold a key
+      while speaking.
+    </p>
   </description>
 
   <launchable type="desktop-id">com.alijeyrad.GoTalkDictation.desktop</launchable>

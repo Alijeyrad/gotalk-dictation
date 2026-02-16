@@ -3,62 +3,74 @@ package audio
 import (
 	"context"
 	"fmt"
-	"os/exec"
+
+	"github.com/jfreymuth/pulse"
+	"github.com/jfreymuth/pulse/proto"
 )
 
 type Recorder struct {
-	cmd    *exec.Cmd
+	client *pulse.Client
+	stream *pulse.RecordStream
 	cancel context.CancelFunc
 }
 
+// rawWriter implements pulse.Writer, forwarding raw S16_LE bytes to a channel.
+type rawWriter struct {
+	ch  chan<- []byte
+	ctx context.Context
+}
+
+func (w *rawWriter) Write(buf []byte) (int, error) {
+	chunk := make([]byte, len(buf))
+	copy(chunk, buf)
+	select {
+	case w.ch <- chunk:
+		return len(buf), nil
+	case <-w.ctx.Done():
+		return 0, w.ctx.Err()
+	}
+}
+
+func (w *rawWriter) Format() byte { return proto.FormatInt16LE }
+
 func (r *Recorder) Start(ctx context.Context) (<-chan []byte, error) {
-	// Stop any previous session before starting a new one so its arecord
-	// process and goroutine are not orphaned.
 	r.Stop()
 
 	ctx, cancel := context.WithCancel(ctx)
 	r.cancel = cancel
 
-	r.cmd = exec.CommandContext(ctx, "arecord",
-		"-r", "16000",
-		"-f", "S16_LE",
-		"-c", "1",
-		"-t", "raw",
-		"-q",
+	client, err := pulse.NewClient(
+		pulse.ClientApplicationName("GoTalk Dictation"),
 	)
-
-	stdout, err := r.cmd.StdoutPipe()
 	if err != nil {
 		cancel()
-		return nil, fmt.Errorf("creating arecord pipe: %w", err)
+		return nil, fmt.Errorf("connecting to PulseAudio: %w", err)
 	}
 
-	if err := r.cmd.Start(); err != nil {
-		cancel()
-		return nil, fmt.Errorf("starting arecord: %w", err)
-	}
-
-	cmd := r.cmd // capture before r.cmd may be overwritten
 	ch := make(chan []byte, 16)
+	w := &rawWriter{ch: ch, ctx: ctx}
+
+	stream, err := client.NewRecord(w,
+		pulse.RecordMono,
+		pulse.RecordSampleRate(16000),
+		pulse.RecordMediaName("GoTalk Dictation"),
+	)
+	if err != nil {
+		client.Close()
+		cancel()
+		return nil, fmt.Errorf("creating record stream: %w", err)
+	}
+
+	stream.Start()
+	r.client = client
+	r.stream = stream
+
 	go func() {
 		defer close(ch)
-		defer cmd.Wait() //nolint:errcheck // reap the process to avoid zombies
-		buf := make([]byte, 4096)
-		for {
-			n, err := stdout.Read(buf)
-			if n > 0 {
-				chunk := make([]byte, n)
-				copy(chunk, buf[:n])
-				select {
-				case ch <- chunk:
-				case <-ctx.Done():
-					return
-				}
-			}
-			if err != nil {
-				return
-			}
-		}
+		<-ctx.Done()
+		stream.Stop()
+		stream.Close()
+		client.Close()
 	}()
 
 	return ch, nil
@@ -67,5 +79,6 @@ func (r *Recorder) Start(ctx context.Context) (<-chan []byte, error) {
 func (r *Recorder) Stop() {
 	if r.cancel != nil {
 		r.cancel()
+		r.cancel = nil
 	}
 }

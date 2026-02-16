@@ -1,6 +1,6 @@
 app-id: com.alijeyrad.GoTalkDictation
 runtime: org.freedesktop.Platform
-runtime-version: '24.08'
+runtime-version: '25.08'
 sdk: org.freedesktop.Sdk
 sdk-extensions:
   - org.freedesktop.Sdk.Extension.golang
@@ -11,11 +11,11 @@ command: gotalk-dictation
 finish-args:
   - --socket=x11
   - --share=ipc
-  # Microphone access via ALSA
-  - --device=all
-  # Home directory for config (~/.config/gotalk-dictation/) and
-  # Google credentials (~/.config/gcloud/)
-  - --filesystem=home
+  # Microphone access via PulseAudio/PipeWire
+  - --socket=pulseaudio
+  # App config and optional Google Cloud credentials
+  - --filesystem=xdg-config/gotalk-dictation
+  - --filesystem=xdg-config/gcloud:ro
   # System tray (StatusNotifierItem)
   - --talk-name=org.kde.StatusNotifierWatcher
   - --talk-name=org.freedesktop.Notifications
@@ -27,6 +27,7 @@ build-options:
   env:
     GOPATH: /run/build/gotalk-dictation/gopath
     GOFLAGS: -mod=vendor
+    GOTOOLCHAIN: local
     CGO_ENABLED: '1'
 
 modules:

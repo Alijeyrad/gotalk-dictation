@@ -4,21 +4,13 @@ package typing
 
 import (
 	"os"
-	"os/exec"
 	"strings"
 	"testing"
 )
 
 func TestMain(m *testing.M) {
 	if os.Getenv("DISPLAY") == "" {
-		// No X11 display: skip all X11 tests.
 		os.Exit(0)
-	}
-	for _, tool := range []string{"xdotool", "xclip"} {
-		if _, err := exec.LookPath(tool); err != nil {
-			// Required tool not found: skip all X11 tests.
-			os.Exit(0)
-		}
 	}
 	os.Exit(m.Run())
 }
@@ -60,7 +52,6 @@ func TestUndoAfterType(t *testing.T) {
 	if err := ty.Undo(); err != nil {
 		t.Fatalf("Undo() error: %v", err)
 	}
-	// After undo, lastRuneCount should be reset to 0.
 	if ty.lastRuneCount != 0 {
 		t.Errorf("lastRuneCount after Undo = %d, want 0", ty.lastRuneCount)
 	}

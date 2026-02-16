@@ -124,17 +124,8 @@ func (t *Tray) SetProcessing() {
 	}
 }
 
-func (t *Tray) SetDone(text string) {
-	gen := t.popupGen.Add(1)
-	if t.popup != nil {
-		t.popup.ShowDone(text)
-	}
-	go func() {
-		time.Sleep(2 * time.Second)
-		if t.popupGen.Load() == gen {
-			t.SetIdle()
-		}
-	}()
+func (t *Tray) SetDone(_ string) {
+	t.SetIdle()
 }
 
 func (t *Tray) SetIdle() {

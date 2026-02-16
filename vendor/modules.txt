@@ -307,6 +307,11 @@ github.com/jeandeaual/go-locale
 ## explicit; go 1.11
 github.com/jezek/xgb
 github.com/jezek/xgb/xproto
+github.com/jezek/xgb/xtest
+# github.com/jfreymuth/pulse v0.1.1
+## explicit; go 1.12
+github.com/jfreymuth/pulse
+github.com/jfreymuth/pulse/proto
 # github.com/jsummers/gobmp v0.0.0-20230614200233-a9de23ed2e25
 ## explicit
 github.com/jsummers/gobmp

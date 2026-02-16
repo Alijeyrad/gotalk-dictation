@@ -39,13 +39,17 @@ clean: ## Remove the build directory
 
 # --- Install ------------------------------------------------
 
-install: build ## Install binary + .desktop file system-wide
+install: build ## Install binary + .desktop file + icon system-wide
 	@printf "$(BLUE)Installing $(BINARY)...$(RESET)\n"
 	@sudo install -m 755 $(BIN) /usr/local/bin/$(BINARY)
 	@sudo install -m 644 packaging/com.alijeyrad.GoTalkDictation.desktop \
 		/usr/share/applications/com.alijeyrad.GoTalkDictation.desktop
 	@sudo install -m 644 packaging/com.alijeyrad.GoTalkDictation.metainfo.xml \
 		/usr/share/metainfo/com.alijeyrad.GoTalkDictation.metainfo.xml 2>/dev/null || true
+	@sudo mkdir -p /usr/share/icons/hicolor/128x128/apps
+	@sudo install -m 644 internal/ui/assets/icon.png \
+		/usr/share/icons/hicolor/128x128/apps/com.alijeyrad.GoTalkDictation.png
+	@sudo gtk-update-icon-cache -f -t /usr/share/icons/hicolor 2>/dev/null || true
 	@printf "$(GREEN)Installed to /usr/local/bin/$(BINARY)$(RESET)\n"
 	@printf "$(GREEN)Desktop entry: /usr/share/applications/com.alijeyrad.GoTalkDictation.desktop$(RESET)\n"
 
@@ -54,6 +58,8 @@ uninstall: ## Remove the installed binary and desktop file
 	@sudo rm -f /usr/local/bin/$(BINARY)
 	@sudo rm -f /usr/share/applications/com.alijeyrad.GoTalkDictation.desktop
 	@sudo rm -f /usr/share/metainfo/com.alijeyrad.GoTalkDictation.metainfo.xml
+	@sudo rm -f /usr/share/icons/hicolor/128x128/apps/com.alijeyrad.GoTalkDictation.png
+	@sudo gtk-update-icon-cache -f -t /usr/share/icons/hicolor 2>/dev/null || true
 	@printf "$(GREEN)Uninstalled!$(RESET)\n"
 
 autostart: ## Add a login autostart entry for the current user
@@ -66,21 +72,19 @@ autostart: ## Add a login autostart entry for the current user
 
 # --- Development --------------------------------------------
 
-deps: ## Install system build and runtime dependencies
+deps: ## Install system build dependencies (X11 headers, GL)
 	@printf "$(BLUE)Installing system dependencies...$(RESET)\n"
 	@if command -v dnf >/dev/null 2>&1; then \
 		sudo dnf install -y libX11-devel libXcursor-devel libXrandr-devel \
-			libXinerama-devel libXi-devel libXxf86vm-devel mesa-libGL-devel \
-			alsa-utils xdotool xclip; \
+			libXinerama-devel libXi-devel libXxf86vm-devel mesa-libGL-devel; \
 	elif command -v apt-get >/dev/null 2>&1; then \
 		sudo apt-get install -y libx11-dev libxcursor-dev libxrandr-dev \
-			libxinerama-dev libxi-dev libxxf86vm-dev libgl1-mesa-dev \
-			alsa-utils xdotool xclip; \
+			libxinerama-dev libxi-dev libxxf86vm-dev libgl1-mesa-dev; \
 	elif command -v pacman >/dev/null 2>&1; then \
 		sudo pacman -S --needed libx11 libxcursor libxrandr libxinerama \
-			libxi libxxf86vm mesa alsa-utils xdotool xclip; \
+			libxi libxxf86vm mesa; \
 	else \
-		printf "$(RED)Unknown package manager — install manually: alsa-utils xdotool xclip$(RESET)\n"; \
+		printf "$(RED)Unknown package manager$(RESET)\n"; \
 		exit 1; \
 	fi
 	@printf "$(GREEN)Dependencies installed!$(RESET)\n"
@@ -90,7 +94,7 @@ test: ## Run unit tests (no external deps)
 	@go test -v -count=1 -race ./...
 	@printf "$(GREEN)Done!$(RESET)\n"
 
-test-x11: ## Run X11 integration tests (needs DISPLAY, xdotool, xclip, arecord)
+test-x11: ## Run X11 integration tests (needs DISPLAY + PulseAudio)
 	@printf "$(BLUE)Running X11 integration tests...$(RESET)\n"
 	@go test -v -count=1 -tags x11test ./internal/typing/... ./internal/audio/...
 	@printf "$(GREEN)Done!$(RESET)\n"

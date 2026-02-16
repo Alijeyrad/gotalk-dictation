@@ -12,9 +12,8 @@ import (
 )
 
 func TestMain(m *testing.M) {
-	if _, err := exec.LookPath("arecord"); err != nil {
-		// arecord not found: skip all X11/audio tests.
-		m.Run() // Run to register as skipped rather than fail.
+	// PulseAudio or PipeWire must be running for audio tests.
+	if err := exec.Command("pactl", "info").Run(); err != nil {
 		return
 	}
 	m.Run()

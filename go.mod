@@ -6,6 +6,7 @@ require (
 	cloud.google.com/go/speech v1.29.0
 	fyne.io/fyne/v2 v2.7.2
 	github.com/jezek/xgb v1.2.0
+	github.com/jfreymuth/pulse v0.1.1
 	github.com/testcontainers/testcontainers-go v0.40.0
 )
 

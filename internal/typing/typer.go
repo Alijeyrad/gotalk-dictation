@@ -1,9 +1,8 @@
 package typing
 
 import (
-	"bytes"
-	"os/exec"
 	"strings"
+	"sync"
 )
 
 var punctuationMap = map[string]string{
@@ -28,6 +27,19 @@ const clipboardThreshold = 50 // chars; above this use clipboard paste
 type Typer struct {
 	EnablePunctuation bool
 	lastRuneCount     int
+
+	once sync.Once
+	x    *x11Typer
+}
+
+func (t *Typer) init() {
+	t.once.Do(func() {
+		x, err := newX11Typer()
+		if err != nil {
+			return
+		}
+		t.x = x
+	})
 }
 
 func (t *Typer) Type(text string) error {
@@ -35,37 +47,19 @@ func (t *Typer) Type(text string) error {
 		text = processPunctuation(text)
 	}
 	t.lastRuneCount = len([]rune(text))
-	if t.lastRuneCount >= clipboardThreshold {
-		return typeViaClipboard(text)
+	t.init()
+	if t.x == nil {
+		return errNoX11
 	}
-	return exec.Command("xdotool", "type", "--clearmodifiers", "--delay", "0", "--", text).Run()
+	if t.lastRuneCount >= clipboardThreshold {
+		return t.typeViaClipboard(text)
+	}
+	t.x.typeString(text)
+	return nil
 }
 
-// typeViaClipboard saves the current clipboard, writes text to it, pastes,
-// then restores the original clipboard contents.
-func typeViaClipboard(text string) error {
-	// Save current clipboard.
-	saved, _ := exec.Command("xclip", "-selection", "clipboard", "-o").Output()
-
-	// Write new text to clipboard.
-	cmd := exec.Command("xclip", "-selection", "clipboard")
-	cmd.Stdin = bytes.NewReader([]byte(text))
-	if err := cmd.Run(); err != nil {
-		// xclip not available — fall back to xdotool.
-		return exec.Command("xdotool", "type", "--clearmodifiers", "--delay", "0", "--", text).Run()
-	}
-
-	// Paste.
-	if err := exec.Command("xdotool", "key", "--clearmodifiers", "ctrl+v").Run(); err != nil {
-		return err
-	}
-
-	// Restore original clipboard (best-effort).
-	if len(saved) > 0 {
-		restore := exec.Command("xclip", "-selection", "clipboard")
-		restore.Stdin = bytes.NewReader(saved)
-		restore.Run() //nolint:errcheck
-	}
+func (t *Typer) typeViaClipboard(text string) error {
+	t.x.setClipboardAndPaste(text)
 	return nil
 }
 
@@ -73,14 +67,21 @@ func (t *Typer) Undo() error {
 	if t.lastRuneCount == 0 {
 		return nil
 	}
-	// Build a BackSpace key sequence.
-	keys := make([]string, t.lastRuneCount)
-	for i := range keys {
-		keys[i] = "BackSpace"
-	}
+	n := t.lastRuneCount
 	t.lastRuneCount = 0
-	return exec.Command("xdotool", append([]string{"key", "--clearmodifiers", "--delay", "0"}, keys...)...).Run()
+	t.init()
+	if t.x == nil {
+		return errNoX11
+	}
+	t.x.sendBackspaces(n)
+	return nil
 }
+
+var errNoX11 = &x11Error{}
+
+type x11Error struct{}
+
+func (e *x11Error) Error() string { return "X11 connection unavailable" }
 
 func processPunctuation(text string) string {
 	words := strings.Fields(text)
@@ -103,8 +104,6 @@ func processPunctuation(text string) string {
 		}
 		i++
 	}
-	// Join tokens with a space, but skip spaces adjacent to whitespace-only tokens
-	// (e.g. "new line" → "\n" must not get surrounding spaces).
 	var out strings.Builder
 	for i, token := range result {
 		if i > 0 {

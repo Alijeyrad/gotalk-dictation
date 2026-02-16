@@ -9,7 +9,7 @@ RUN pacman -Syu --noconfirm \
     && pacman -S --noconfirm --needed \
     wget \
     libx11 libxcursor libxrandr libxinerama libxi libxxf86vm mesa \
-    alsa-utils xdotool xclip xorg-server-xvfb \
+    xorg-server-xvfb \
     && pacman -Scc --noconfirm
 
 # Install Go 1.26

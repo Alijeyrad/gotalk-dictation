@@ -26,6 +26,7 @@ go.work.sum
 
 # build output
 /build/
+/.flatpak-builder/
 gotalk-dictation
 
 # env file

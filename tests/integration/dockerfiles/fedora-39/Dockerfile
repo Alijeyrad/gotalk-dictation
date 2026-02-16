@@ -9,7 +9,7 @@ RUN dnf install -y \
     wget \
     libX11-devel libXcursor-devel libXrandr-devel \
     libXinerama-devel libXi-devel libXxf86vm-devel mesa-libGL-devel \
-    alsa-utils xdotool xclip xorg-x11-server-Xvfb \
+    xorg-x11-server-Xvfb \
     && dnf clean all
 
 # Install Go 1.26
