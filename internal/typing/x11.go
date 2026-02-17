@@ -1,6 +1,7 @@
 package typing
 
 import (
+	"context"
 	"fmt"
 	"time"
 	"unicode"
@@ -32,6 +33,9 @@ type x11Typer struct {
 	utf8String xproto.Atom
 	targets    xproto.Atom
 	xselData   xproto.Atom
+
+	// clipCancel cancels the in-flight clipboard-serving goroutine, if any.
+	clipCancel context.CancelFunc
 }
 
 func newX11Typer() (*x11Typer, error) {
@@ -224,26 +228,43 @@ func (x *x11Typer) getClipboard() string {
 	}
 }
 
-// setClipboardAndPaste takes CLIPBOARD ownership, sends Ctrl+V, then serves
-// SelectionRequest events until the actual data request is fulfilled.
+// setClipboardAndPaste takes CLIPBOARD ownership, injects Ctrl+V, then serves
+// the X11 selection protocol in a background goroutine so this call returns
+// immediately and never stalls the target window.
 //
-// Apps commonly do a two-step negotiation: first they request TARGETS (to
-// discover available formats), then request the actual data (UTF8_STRING).
-// We must serve both rounds before exiting, otherwise the target app blocks.
+// Apps typically do a two-step negotiation: first request TARGETS (format
+// discovery), then request UTF8_STRING (the actual text). The background
+// goroutine handles both rounds and exits once the data has been delivered or
+// after a 5-second safety timeout.
 func (x *x11Typer) setClipboardAndPaste(text string) {
+	// Cancel any previous clipboard-serving goroutine.
+	if x.clipCancel != nil {
+		x.clipCancel()
+	}
+
 	data := []byte(text)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	x.clipCancel = cancel
 
 	xproto.SetSelectionOwner(x.conn, x.wid, x.clipboard, xproto.TimeCurrentTime) //nolint:errcheck
-
-	// Send Ctrl+V — the target app will send SelectionRequest(s).
 	x.sendCtrlV()
 
-	// Serve SelectionRequest events for up to 2 seconds. Keep looping after
-	// a TARGETS response so we can also serve the follow-up data request.
-	deadline := time.After(2 * time.Second)
+	go x.serveClipboard(ctx, cancel, data)
+}
+
+// serveClipboard runs in a goroutine and responds to SelectionRequest events
+// from the paste target. It exits after the actual data request is served, on
+// ctx cancellation, or after the built-in timeout fires.
+//
+// The same x.conn is used for both XTest typing and clipboard serving. This is
+// safe because XTest calls use Request/Reply (xgb's reply queue) while
+// clipboard serving uses PollForEvent (xgb's event queue); the two queues are
+// independent.
+func (x *x11Typer) serveClipboard(ctx context.Context, cancel context.CancelFunc, data []byte) {
+	defer cancel()
 	for {
 		select {
-		case <-deadline:
+		case <-ctx.Done():
 			return
 		default:
 		}
@@ -258,10 +279,10 @@ func (x *x11Typer) setClipboardAndPaste(text string) {
 		if req, ok := ev.(xproto.SelectionRequestEvent); ok {
 			x.handleSelectionRequest(req, data)
 			if req.Target != x.targets {
-				// Served the actual data request — done.
+				// Delivered the actual data — done.
 				return
 			}
-			// Served TARGETS negotiation — keep looping for the data request.
+			// Delivered TARGETS negotiation — keep looping for the data request.
 		}
 	}
 }

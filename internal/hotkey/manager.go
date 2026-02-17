@@ -104,45 +104,33 @@ func (m *Manager) eventLoop(onPress, onRelease func()) {
 
 		switch ev.(type) {
 		case xproto.KeyPressEvent:
-			if isPTT {
-				if pendingRelease.Swap(false) {
-					// KeyPress while release timer is still pending = auto-repeat.
-					// Increment gen so the goroutine won't call onRelease.
-					releaseGen.Add(1)
-					pressed = true // still holding
-				} else if !pressed {
-					// Real new press — release timer has already fired (or this is
-					// the very first press).
-					pressed = true
-					if onPress != nil {
-						go onPress()
-					}
-				}
-			} else {
-				// Toggle mode: fire once per physical press, ignore auto-repeat.
-				if !pressed {
-					pressed = true
-					if onPress != nil {
-						go onPress()
-					}
+			if pendingRelease.Swap(false) {
+				// KeyPress while the release timer is still pending = X11 auto-repeat.
+				// Cancel the pending release and keep tracking the hold.
+				releaseGen.Add(1)
+				pressed = true
+			} else if !pressed {
+				// Real new press — either the first press, or the grace period
+				// confirmed that the previous release was genuine.
+				pressed = true
+				if onPress != nil {
+					go onPress()
 				}
 			}
 		case xproto.KeyReleaseEvent:
 			pressed = false
-			if isPTT && onRelease != nil {
-				pendingRelease.Store(true)
-				gen := releaseGen.Add(1)
-				rel := onRelease
-				go func() {
-					time.Sleep(autoRepeatGrace)
-					// Clear the flag so the next KeyPress is treated as a fresh press.
-					pendingRelease.Store(false)
-					if releaseGen.Load() == gen {
-						// Gen unchanged: no auto-repeat arrived, this was a real release.
-						rel()
-					}
-				}()
-			}
+			pendingRelease.Store(true)
+			gen := releaseGen.Add(1)
+			rel := onRelease
+			go func() {
+				time.Sleep(autoRepeatGrace)
+				// Clear the flag so the next KeyPress is treated as a fresh press.
+				pendingRelease.Store(false)
+				if releaseGen.Load() == gen && isPTT && rel != nil {
+					// Gen unchanged and PTT: real release — fire the release callback.
+					rel()
+				}
+			}()
 		}
 	}
 }
