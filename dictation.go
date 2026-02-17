@@ -17,6 +17,12 @@ func (a *app) newRecognizer() *speech.Recognizer {
 	}
 }
 
+func (a *app) newPTTRecognizer() *speech.Recognizer {
+	r := a.newRecognizer()
+	r.SkipVAD = true
+	return r
+}
+
 func (a *app) toggleDictation() {
 	a.mu.Lock()
 	listening := a.isListening
@@ -29,7 +35,21 @@ func (a *app) toggleDictation() {
 	}
 }
 
+func (a *app) pttStartDictation() {
+	a.cfgMu.RLock()
+	rec := a.newPTTRecognizer()
+	a.cfgMu.RUnlock()
+	go a.runDictation(rec)
+}
+
 func (a *app) startDictation() {
+	a.cfgMu.RLock()
+	rec := a.recognizer
+	a.cfgMu.RUnlock()
+	a.runDictation(rec)
+}
+
+func (a *app) runDictation(rec *speech.Recognizer) {
 	a.mu.Lock()
 	if a.isListening {
 		a.mu.Unlock()
@@ -60,7 +80,6 @@ func (a *app) startDictation() {
 	}
 
 	a.cfgMu.RLock()
-	rec := a.recognizer
 	typer := a.typer
 	a.cfgMu.RUnlock()
 

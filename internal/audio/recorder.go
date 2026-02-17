@@ -21,14 +21,23 @@ type rawWriter struct {
 }
 
 func (w *rawWriter) Write(buf []byte) (int, error) {
-	chunk := make([]byte, len(buf))
-	copy(chunk, buf)
+	// Check cancellation first without blocking.
 	select {
-	case w.ch <- chunk:
-		return len(buf), nil
 	case <-w.ctx.Done():
 		return 0, w.ctx.Err()
+	default:
 	}
+	chunk := make([]byte, len(buf))
+	copy(chunk, buf)
+	// Non-blocking send: drop the chunk if the consumer is busy (e.g. during
+	// the API call). This must never block because Write is called from the
+	// pulse dispatch goroutine — blocking it prevents Request() replies and
+	// causes a deadlock when Stop/Close are called.
+	select {
+	case w.ch <- chunk:
+	default:
+	}
+	return len(buf), nil
 }
 
 func (w *rawWriter) Format() byte { return proto.FormatInt16LE }
@@ -53,6 +62,9 @@ func (r *Recorder) Start(ctx context.Context) (<-chan []byte, error) {
 	stream, err := client.NewRecord(w,
 		pulse.RecordMono,
 		pulse.RecordSampleRate(16000),
+		// ~62 ms chunks (2000 bytes at 16 kHz/16-bit mono) — keeps VAD
+		// responsive and matches the old arecord behaviour.
+		pulse.RecordBufferFragmentSize(2000),
 		pulse.RecordMediaName("GoTalk Dictation"),
 	)
 	if err != nil {
@@ -68,8 +80,11 @@ func (r *Recorder) Start(ctx context.Context) (<-chan []byte, error) {
 	go func() {
 		defer close(ch)
 		<-ctx.Done()
-		stream.Stop()
-		stream.Close()
+		// Close the socket directly. Calling stream.Stop() or stream.Close()
+		// sends PA requests via Request(), which blocks waiting for a reply
+		// from the dispatch goroutine. If Write() ever stalled the dispatch
+		// goroutine (even transiently), that would deadlock. client.Close()
+		// closes the socket, causing the dispatch goroutine to exit cleanly.
 		client.Close()
 	}()
 

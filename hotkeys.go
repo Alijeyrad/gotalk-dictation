@@ -42,7 +42,7 @@ func (a *app) registerHotkeys() error {
 
 	// PTT and undo errors are non-fatal — app still works with just the toggle hotkey.
 	a.bindHotkey(&a.pttHkm, cfg.PTTHotkey, func(h *hotkey.Manager) error { //nolint:errcheck
-		return h.RegisterPushToTalk(a.startDictation, a.recorder.Stop)
+		return h.RegisterPushToTalk(a.pttStartDictation, a.recorder.Stop)
 	})
 	a.bindHotkey(&a.undoHkm, cfg.UndoHotkey, func(h *hotkey.Manager) error { //nolint:errcheck
 		return h.Register(a.undoLastDictation)
@@ -67,7 +67,7 @@ func (a *app) rebindPTTHotkey(key string) {
 	defer a.hkmMu.Unlock()
 
 	if err := a.bindHotkey(&a.pttHkm, key, func(h *hotkey.Manager) error {
-		return h.RegisterPushToTalk(a.startDictation, a.recorder.Stop)
+		return h.RegisterPushToTalk(a.pttStartDictation, a.recorder.Stop)
 	}); err != nil {
 		a.tray.SetError("PTT hotkey error: " + key)
 	}

@@ -225,17 +225,22 @@ func (x *x11Typer) getClipboard() string {
 }
 
 // setClipboardAndPaste takes CLIPBOARD ownership, sends Ctrl+V, then serves
-// one SelectionRequest so the target app receives the text.
+// SelectionRequest events until the actual data request is fulfilled.
+//
+// Apps commonly do a two-step negotiation: first they request TARGETS (to
+// discover available formats), then request the actual data (UTF8_STRING).
+// We must serve both rounds before exiting, otherwise the target app blocks.
 func (x *x11Typer) setClipboardAndPaste(text string) {
 	data := []byte(text)
 
 	xproto.SetSelectionOwner(x.conn, x.wid, x.clipboard, xproto.TimeCurrentTime) //nolint:errcheck
 
-	// Send Ctrl+V — the target app will send a SelectionRequest.
+	// Send Ctrl+V — the target app will send SelectionRequest(s).
 	x.sendCtrlV()
 
-	// Serve SelectionRequest events for up to 1 second.
-	deadline := time.After(1 * time.Second)
+	// Serve SelectionRequest events for up to 2 seconds. Keep looping after
+	// a TARGETS response so we can also serve the follow-up data request.
+	deadline := time.After(2 * time.Second)
 	for {
 		select {
 		case <-deadline:
@@ -252,7 +257,11 @@ func (x *x11Typer) setClipboardAndPaste(text string) {
 		}
 		if req, ok := ev.(xproto.SelectionRequestEvent); ok {
 			x.handleSelectionRequest(req, data)
-			return // served the paste, done
+			if req.Target != x.targets {
+				// Served the actual data request — done.
+				return
+			}
+			// Served TARGETS negotiation — keep looping for the data request.
 		}
 	}
 }

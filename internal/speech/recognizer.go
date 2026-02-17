@@ -35,6 +35,10 @@ type Recognizer struct {
 	// Sensitivity is the RMS threshold multiplier (lower = more sensitive).
 	Sensitivity float64
 
+	// SkipVAD buffers all incoming audio without voice-activity detection.
+	// Use for push-to-talk mode where the key-release signals end-of-speech.
+	SkipVAD bool
+
 	// OnProcessing is called when VAD ends and the API call begins,
 	// allowing the UI to switch from "Listening" to "Processing".
 	OnProcessing func()
@@ -75,7 +79,13 @@ func HasCloudCredentials() bool {
 }
 
 func (r *Recognizer) recognizeFree(ctx context.Context, audioCh <-chan []byte) (string, error) {
-	pcm, err := r.bufferWithVAD(ctx, audioCh)
+	var pcm []byte
+	var err error
+	if r.SkipVAD {
+		pcm = bufferAll(ctx, audioCh)
+	} else {
+		pcm, err = r.bufferWithVAD(ctx, audioCh)
+	}
 
 	if r.OnProcessing != nil {
 		r.OnProcessing()
@@ -86,6 +96,23 @@ func (r *Recognizer) recognizeFree(ctx context.Context, audioCh <-chan []byte) (
 	}
 
 	return r.postFreeAPI(ctx, pcmToFLACNative(pcm))
+}
+
+// bufferAll reads every chunk from audioCh until the channel is closed or ctx
+// is cancelled. Used for PTT mode where key-release signals end-of-speech.
+func bufferAll(ctx context.Context, audioCh <-chan []byte) []byte {
+	var result []byte
+	for {
+		select {
+		case chunk, ok := <-audioCh:
+			if !ok {
+				return result
+			}
+			result = append(result, chunk...)
+		case <-ctx.Done():
+			return result
+		}
+	}
 }
 
 func (r *Recognizer) bufferWithVAD(ctx context.Context, audioCh <-chan []byte) ([]byte, error) {
