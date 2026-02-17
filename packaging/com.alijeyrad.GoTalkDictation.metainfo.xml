@@ -59,6 +59,14 @@
   <content_rating type="oars-1.1"/>
 
   <releases>
+    <release version="1.1.0" date="2026-02-17">
+      <description>
+        <p>Remove all runtime dependencies (arecord, xdotool, xclip) — audio via
+        PulseAudio, typing via XTest, clipboard via native X11 selection protocol.
+        Fix toggle hotkey auto-repeat causing repeated start/stop, fix PTT VAD
+        mismatch, and fix clipboard race that caused freezing after first dictation.</p>
+      </description>
+    </release>
     <release version="1.0.2" date="2026-02-15">
       <description>
         <p>Add security vulnerability reporting policy (SECURITY.md).</p>
