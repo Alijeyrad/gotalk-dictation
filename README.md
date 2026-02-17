@@ -43,6 +43,26 @@ make install   # build and install to /usr/local/bin + .desktop + icon
 make autostart # optional: start at login
 ```
 
+## Uninstall
+
+```bash
+./uninstall.sh
+```
+
+The script stops any running instance, removes all system-wide and per-user files (binary, desktop entry, icon, autostart), and prompts before deleting your settings.
+
+If you installed from source:
+
+```bash
+make uninstall
+```
+
+This does the same non-interactively — your config at `~/.config/gotalk-dictation/` is preserved. Remove it manually if you want a completely clean slate:
+
+```bash
+rm -rf ~/.config/gotalk-dictation/
+```
+
 ## Settings
 
 Open **Settings** from the tray icon. Everything takes effect immediately.

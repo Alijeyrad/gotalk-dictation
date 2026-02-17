@@ -1,8 +1,8 @@
 package typing
 
 import (
-	"context"
 	"fmt"
+	"sync"
 	"time"
 	"unicode"
 
@@ -34,8 +34,10 @@ type x11Typer struct {
 	targets    xproto.Atom
 	xselData   xproto.Atom
 
-	// clipCancel cancels the in-flight clipboard-serving goroutine, if any.
-	clipCancel context.CancelFunc
+	// Clipboard worker — one goroutine, shared data under clipMu.
+	clipMu   sync.Mutex
+	clipData []byte
+	clipStop chan struct{}
 }
 
 func newX11Typer() (*x11Typer, error) {
@@ -84,10 +86,18 @@ func newX11Typer() (*x11Typer, error) {
 	x.targets = x.internAtom("TARGETS")
 	x.xselData = x.internAtom("XSEL_DATA")
 
+	x.clipStop = make(chan struct{})
+	go x.clipboardWorker()
+
 	return x, nil
 }
 
 func (x *x11Typer) close() {
+	select {
+	case <-x.clipStop:
+	default:
+		close(x.clipStop)
+	}
 	xproto.DestroyWindow(x.conn, x.wid) //nolint:errcheck
 	x.conn.Close()
 }
@@ -228,61 +238,65 @@ func (x *x11Typer) getClipboard() string {
 	}
 }
 
-// setClipboardAndPaste takes CLIPBOARD ownership, injects Ctrl+V, then serves
-// the X11 selection protocol in a background goroutine so this call returns
-// immediately and never stalls the target window.
-//
-// Apps typically do a two-step negotiation: first request TARGETS (format
-// discovery), then request UTF8_STRING (the actual text). The background
-// goroutine handles both rounds and exits once the data has been delivered or
-// after a 5-second safety timeout.
+// setClipboardAndPaste takes CLIPBOARD ownership, updates the worker's data,
+// then injects Ctrl+V. It returns immediately — the clipboard protocol is
+// handled entirely by clipboardWorker.
 func (x *x11Typer) setClipboardAndPaste(text string) {
-	// Cancel any previous clipboard-serving goroutine.
-	if x.clipCancel != nil {
-		x.clipCancel()
-	}
-
-	data := []byte(text)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	x.clipCancel = cancel
+	x.clipMu.Lock()
+	x.clipData = []byte(text)
+	x.clipMu.Unlock()
 
 	xproto.SetSelectionOwner(x.conn, x.wid, x.clipboard, xproto.TimeCurrentTime) //nolint:errcheck
 	x.sendCtrlV()
-
-	go x.serveClipboard(ctx, cancel, data)
 }
 
-// serveClipboard runs in a goroutine and responds to SelectionRequest events
-// from the paste target. It exits after the actual data request is served, on
-// ctx cancellation, or after the built-in timeout fires.
+// clipboardWorker is a single long-lived goroutine that handles all
+// SelectionRequest events for clipboard paste. Using one goroutine eliminates
+// the race where a previous per-paste goroutine could steal SelectionRequest
+// events that were meant for a subsequent paste.
 //
-// The same x.conn is used for both XTest typing and clipboard serving. This is
-// safe because XTest calls use Request/Reply (xgb's reply queue) while
-// clipboard serving uses PollForEvent (xgb's event queue); the two queues are
-// independent.
-func (x *x11Typer) serveClipboard(ctx context.Context, cancel context.CancelFunc, data []byte) {
-	defer cancel()
+// Only this goroutine calls PollForEvent; typing code (typeString, sendCtrlV)
+// only sends requests and waits for replies — separate queues in xgb, no
+// contention.
+func (x *x11Typer) clipboardWorker() {
 	for {
+		// Check for shutdown without blocking.
 		select {
-		case <-ctx.Done():
+		case <-x.clipStop:
 			return
 		default:
 		}
+
 		ev, err := x.conn.PollForEvent()
 		if err != nil {
 			return
 		}
 		if ev == nil {
-			time.Sleep(5 * time.Millisecond)
+			// No events — sleep briefly, re-checking for shutdown.
+			select {
+			case <-x.clipStop:
+				return
+			case <-time.After(5 * time.Millisecond):
+			}
 			continue
 		}
-		if req, ok := ev.(xproto.SelectionRequestEvent); ok {
-			x.handleSelectionRequest(req, data)
-			if req.Target != x.targets {
-				// Delivered the actual data — done.
-				return
-			}
-			// Delivered TARGETS negotiation — keep looping for the data request.
+
+		req, ok := ev.(xproto.SelectionRequestEvent)
+		if !ok {
+			continue
+		}
+		x.clipMu.Lock()
+		data := x.clipData
+		x.clipMu.Unlock()
+		if data == nil {
+			continue
+		}
+		x.handleSelectionRequest(req, data)
+		if req.Target != x.targets {
+			// Actual data delivered — clear so stale requests are ignored.
+			x.clipMu.Lock()
+			x.clipData = nil
+			x.clipMu.Unlock()
 		}
 	}
 }

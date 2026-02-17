@@ -53,14 +53,19 @@ install: build ## Install binary + .desktop file + icon system-wide
 	@printf "$(GREEN)Installed to /usr/local/bin/$(BINARY)$(RESET)\n"
 	@printf "$(GREEN)Desktop entry: /usr/share/applications/com.alijeyrad.GoTalkDictation.desktop$(RESET)\n"
 
-uninstall: ## Remove the installed binary and desktop file
+uninstall: ## Remove binary, desktop entry, icon, autostart, and user-local files
 	@printf "$(RED)Uninstalling $(BINARY)...$(RESET)\n"
+	@pkill -x $(BINARY) 2>/dev/null || true
 	@sudo rm -f /usr/local/bin/$(BINARY)
 	@sudo rm -f /usr/share/applications/com.alijeyrad.GoTalkDictation.desktop
 	@sudo rm -f /usr/share/metainfo/com.alijeyrad.GoTalkDictation.metainfo.xml
 	@sudo rm -f /usr/share/icons/hicolor/128x128/apps/com.alijeyrad.GoTalkDictation.png
 	@sudo gtk-update-icon-cache -f -t /usr/share/icons/hicolor 2>/dev/null || true
+	@sudo update-desktop-database /usr/share/applications 2>/dev/null || true
+	@rm -f ~/.local/share/applications/com.alijeyrad.GoTalkDictation.desktop
+	@rm -f ~/.config/autostart/$(BINARY).desktop
 	@printf "$(GREEN)Uninstalled!$(RESET)\n"
+	@printf "$(YELLOW)Note: settings kept at ~/.config/$(BINARY)/ — remove manually if desired$(RESET)\n"
 
 autostart: ## Add a login autostart entry for the current user
 	@printf "$(BLUE)Creating autostart entry...$(RESET)\n"
