@@ -7,6 +7,7 @@ set -euo pipefail
 
 REPO="Alijeyrad/gotalk-dictation"
 BINARY="gotalk-dictation"
+tmpdir=""
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; BLUE='\033[0;34m'; YELLOW='\033[1;33m'; NC='\033[0m'
 info() { echo -e "${BLUE}[gotalk]${NC} $*"; }
@@ -46,9 +47,8 @@ download_release() {
     local url="https://github.com/${REPO}/releases/download/v${version}/${tarball}"
 
     info "Downloading v${version}…"
-    local tmpdir
     tmpdir=$(mktemp -d)
-    trap 'rm -rf "$tmpdir"' EXIT
+    trap 'rm -rf "${tmpdir:-}"' EXIT
 
     curl -fsSL "$url" -o "$tmpdir/$tarball"
     tar -xzf "$tmpdir/$tarball" -C "$tmpdir"
