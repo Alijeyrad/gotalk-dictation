@@ -108,7 +108,7 @@ $LOCAL || download_release
 install_files
 
 echo ""
-ok "Installed! Run: $BINARY"
+ok "Installed! Find GoTalk Dictation in your app launcher."
 echo ""
 
 read -r -p "  Add GoTalk to autostart (run at login)? [y/N] " ans
